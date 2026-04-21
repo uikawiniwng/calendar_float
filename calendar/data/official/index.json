@@ -1,0 +1,282 @@
+{
+  "version": 1,
+  "description": "官方节庆与读物索引。这里存结构化元数据；正文内容放在独立文件中，避免把长文本塞进 TypeScript。",
+  "festivals": [
+    {
+      "id": "huanmo_mask_festival",
+      "title": "幻沫假面祭",
+      "summary": "全民阶级消除与欲望释放的七日狂欢节。",
+      "start": "05-14",
+      "end": "05-20",
+      "content_file": "calendar/content/events/[event]幻沫假面祭.txt",
+      "related_books": [
+        "huanmo_origin_story"
+      ],
+      "controller": {
+        "location_keywords": [
+          "索伦蒂斯王国"
+        ],
+        "mention_keywords": [
+          "幻沫假面祭"
+        ],
+        "reminder_days": 7
+      },
+      "stages": []
+    },
+    {
+      "id": "deepblue_auction_summer",
+      "title": "深蓝拍卖会",
+      "summary": "大陆最高规格黑市拍卖，汇聚违禁品、稀有收藏与权贵暗盘交易。",
+      "start": "06-06",
+      "end": "06-06",
+      "content_file": "calendar/content/events/[event]深蓝拍卖会.txt",
+      "related_books": [
+        "deepblue_auction_guide"
+      ],
+      "controller": {
+        "location_keywords": [
+          "索伦蒂斯王国",
+          "潮汐王座"
+        ],
+        "mention_keywords": [
+          "深蓝拍卖会",
+          "黑市拍卖"
+        ],
+        "reminder_days": 5
+      },
+      "stages": []
+    },
+    {
+      "id": "deepblue_auction_winter",
+      "title": "深蓝拍卖会",
+      "summary": "大陆最高规格黑市拍卖，汇聚违禁品、稀有收藏与权贵暗盘交易。",
+      "start": "12-12",
+      "end": "12-12",
+      "content_file": "calendar/content/events/[event]深蓝拍卖会.txt",
+      "related_books": [
+        "deepblue_auction_guide"
+      ],
+      "controller": {
+        "location_keywords": [
+          "索伦蒂斯王国",
+          "潮汐王座"
+        ],
+        "mention_keywords": [
+          "深蓝拍卖会",
+          "黑市拍卖"
+        ],
+        "reminder_days": 5
+      },
+      "stages": []
+    },
+    {
+      "id": "goddess_beauty_contest",
+      "title": "倾国倾城祭",
+      "summary": "面向全大陆的世界级盛会，以海选、筹备巡游与终焉决赛层层筛出本年度“阿芙罗黛蒂”。",
+      "start": "02-01",
+      "end": "02-14",
+      "content_file": "calendar/content/events/[event]倾国倾城祭.txt",
+      "related_books": [
+        "aphrodite_crown"
+      ],
+      "controller": {
+        "location_keywords": [
+          "索伦蒂斯王国",
+          "银帆城"
+        ],
+        "mention_keywords": [
+          "倾国倾城祭",
+          "阿芙罗黛蒂",
+          "选美大赛"
+        ],
+        "reminder_days": 7
+      },
+      "stages": [
+        {
+          "id": "beauty_preliminary",
+          "day_index": 1,
+          "title": "初绽",
+          "summary": "02-01 至 02-04 的海选期，参赛者在街头公开展演并争取初始选票。",
+          "start": "02-01",
+          "end": "02-04"
+        },
+        {
+          "id": "beauty_preparation_and_parade",
+          "day_index": 2,
+          "title": "筹备与巡游",
+          "summary": "02-05 至 02-12 的号召力测试，包含筹资建队与 02-12 的花车/魔宠巡游。",
+          "start": "02-05",
+          "end": "02-12"
+        },
+        {
+          "id": "beauty_finale",
+          "day_index": 3,
+          "title": "怒放",
+          "summary": "02-14 的终焉决赛，在苍籁剧院进行最终加冕。",
+          "start": "02-14",
+          "end": "02-14"
+        }
+      ]
+    },
+    {
+      "id": "sairelia_fishing_contest",
+      "title": "摸鱼大赛",
+      "summary": "赛瑞利亚每年夏季举办的轻松娱乐赛事，参与者以耐心、技巧与好运角逐海边荣誉。",
+      "start": "07-07",
+      "end": "07-07",
+      "content_file": "calendar/content/events/[event]赛瑞利亚摸鱼大赛.txt",
+      "related_books": [
+        "sairelia_fishing_contest_guide"
+      ],
+      "controller": {
+        "location_keywords": [
+          "赛瑞利亚"
+        ],
+        "mention_keywords": [
+          "摸鱼大赛",
+          "钓鱼比赛"
+        ],
+        "reminder_days": 5
+      },
+      "stages": []
+    },
+    {
+      "id": "sairelia_concert",
+      "title": "赛瑞利亚演奏会",
+      "summary": "赛瑞利亚面向游客与居民开放的海岸演奏会，夜色与潮声共同构成舞台。",
+      "start": "11-30",
+      "end": "11-30",
+      "content_file": "calendar/content/events/[event]赛瑞利亚演奏会.txt",
+      "related_books": [
+        "sairelia_concert_guide"
+      ],
+      "controller": {
+        "location_keywords": [
+          "赛瑞利亚"
+        ],
+        "mention_keywords": [
+          "赛瑞利亚演奏会",
+          "海岸演奏会"
+        ],
+        "reminder_days": 5
+      },
+      "stages": []
+    },
+    {
+      "id": "sairelia_lantern_sea_night",
+      "title": "灯海夜",
+      "summary": "神恩日当夜，赛瑞利亚会点亮成片灯海，为旧岁送别并迎接新年的祈愿。",
+      "start": "12-31",
+      "end": "12-31",
+      "content_file": "calendar/content/events/[event]赛瑞利亚灯海夜.txt",
+      "related_books": [
+        "sairelia_lantern_sea_night_guide"
+      ],
+      "controller": {
+        "location_keywords": [
+          "赛瑞利亚"
+        ],
+        "mention_keywords": [
+          "灯海夜",
+          "灯海祈愿"
+        ],
+        "reminder_days": 3
+      },
+      "stages": []
+    }
+  ],
+  "books": [
+    {
+      "id": "huanmo_origin_story",
+      "title": "幻沫与潮汐之恋：索伦蒂斯的起源",
+      "summary": "讲述人鱼少女佩戴幻沫假面、协助义贼推翻旧王国，并在第七日黎明粉碎谣言的建国史诗。",
+      "content_file": "calendar/content/books/[BOOK]旅游宣发读物_幻沫与潮汐之恋.txt",
+      "controller": {
+        "mention_keywords": [
+          "幻沫与潮汐之恋",
+          "索伦蒂斯的起源"
+        ],
+        "theme_keywords": [
+          "索伦蒂斯",
+          "起源"
+        ]
+      }
+    },
+    {
+      "id": "aphrodite_crown",
+      "title": "阿芙罗黛蒂之冠",
+      "summary": "记录倾国倾城祭的起源，以及塞壬被加冕为永久“至高的阿芙罗黛蒂”的历史。",
+      "content_file": "calendar/content/books/[BOOK]旅游宣发读物_阿芙罗黛蒂之冠.txt",
+      "controller": {
+        "mention_keywords": [
+          "阿芙罗黛蒂之冠"
+        ],
+        "theme_keywords": [
+          "倾国倾城祭",
+          "塞壬",
+          "阿芙罗黛蒂"
+        ]
+      }
+    },
+    {
+      "id": "deepblue_auction_guide",
+      "title": "深蓝拍卖会游客手册",
+      "summary": "深蓝拍卖会的占位读物，后续可补成规则、看点与游客须知。",
+      "content_file": "calendar/content/books/[BOOK]旅游宣发读物_深蓝拍卖会游客手册.txt",
+      "controller": {
+        "mention_keywords": [
+          "深蓝拍卖会游客手册"
+        ],
+        "theme_keywords": [
+          "深蓝拍卖会",
+          "黑市拍卖"
+        ]
+      }
+    },
+    {
+      "id": "sairelia_fishing_contest_guide",
+      "title": "赛瑞利亚摸鱼大赛观光指南",
+      "summary": "摸鱼大赛的占位读物，后续可补成赛程、参赛方式与观光路线。",
+      "content_file": "calendar/content/books/[BOOK]旅游宣发读物_赛瑞利亚摸鱼大赛观光指南.txt",
+      "controller": {
+        "mention_keywords": [
+          "赛瑞利亚摸鱼大赛观光指南"
+        ],
+        "theme_keywords": [
+          "摸鱼大赛",
+          "赛瑞利亚"
+        ]
+      }
+    },
+    {
+      "id": "sairelia_concert_guide",
+      "title": "赛瑞利亚海岸演奏会导览",
+      "summary": "演奏会的占位读物，后续可补成节目单、场地分区与夜游建议。",
+      "content_file": "calendar/content/books/[BOOK]旅游宣发读物_赛瑞利亚海岸演奏会导览.txt",
+      "controller": {
+        "mention_keywords": [
+          "赛瑞利亚海岸演奏会导览"
+        ],
+        "theme_keywords": [
+          "赛瑞利亚演奏会",
+          "海岸演奏会"
+        ]
+      }
+    },
+    {
+      "id": "sairelia_lantern_sea_night_guide",
+      "title": "赛瑞利亚灯海夜祈愿手册",
+      "summary": "灯海夜的占位读物，后续可补成仪式流程、祈愿习俗与夜间动线。",
+      "content_file": "calendar/content/books/[BOOK]旅游宣发读物_赛瑞利亚灯海夜祈愿手册.txt",
+      "controller": {
+        "mention_keywords": [
+          "赛瑞利亚灯海夜祈愿手册"
+        ],
+        "theme_keywords": [
+          "灯海夜",
+          "灯海祈愿"
+        ]
+      }
+    }
+  ]
+}
