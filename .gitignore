@@ -11,7 +11,10 @@ pnpm-debug.log*
 
 auto-imports.d.ts
 components.d.ts
+<<<<<<< HEAD
 
 初始模板/
 示例/
 EJS/
+=======
+>>>>>>> 4e7451805c5655a416233e7632d1b0693b9cade6
