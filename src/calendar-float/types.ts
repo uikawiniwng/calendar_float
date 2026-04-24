@@ -134,6 +134,34 @@ export interface OfficialFestivalControllerConfig {
   reminder_days?: number;
 }
 
+export interface OfficialPromptInjectionConfig {
+  role?: 'system';
+  depth?: number;
+  order?: number;
+}
+
+export interface OfficialFestivalReminderConfig {
+  enabled?: boolean;
+  group?: string;
+  section_id?: string;
+  location_keywords?: string[];
+  mention_keywords?: string[];
+  reminder_days?: number;
+  inject?: OfficialPromptInjectionConfig;
+}
+
+export interface OfficialReminderGroupIndexItem {
+  id: string;
+  title: string;
+  content_file: string;
+}
+
+export interface CalendarMonthAliasDefinition {
+  month: number;
+  label: string;
+  season?: string;
+}
+
 export interface OfficialFestivalIndexItem {
   id: string;
   title: string;
@@ -144,6 +172,7 @@ export interface OfficialFestivalIndexItem {
   related_books: string[];
   stages?: OfficialFestivalStage[];
   controller?: OfficialFestivalControllerConfig;
+  reminder?: OfficialFestivalReminderConfig;
 }
 
 export interface OfficialBookControllerConfig {
@@ -163,6 +192,8 @@ export interface OfficialBookIndexItem {
 export interface OfficialIndexFile {
   version: number;
   description: string;
+  reminder_groups?: OfficialReminderGroupIndexItem[];
+  month_aliases?: CalendarMonthAliasDefinition[];
   festivals: OfficialFestivalIndexItem[];
   books: OfficialBookIndexItem[];
 }

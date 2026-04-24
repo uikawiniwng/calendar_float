@@ -1,4 +1,5 @@
 import type { CalendarBookRecord, DailyAgendaGroup, DailyAgendaItem, MonthDayCell } from './types';
+import { formatCalendarMonthTitle } from './月份别名';
 
 export type AgendaSortMode = 'date-asc' | 'date-desc' | 'title-asc';
 
@@ -138,7 +139,7 @@ export function renderCalendarMonthView(options: {
     <div class="th-month-view">
       <section class="th-month-header">
         <div>
-          <div class="th-month-title">${escapeWidgetHtml(`${currentMonth.year}年 ${currentMonth.month}月`)}</div>
+          <div class="th-month-title">${escapeWidgetHtml(formatCalendarMonthTitle(currentMonth.year, currentMonth.month))}</div>
         </div>
         <div class="th-month-actions">
           <button type="button" class="th-btn" data-action="month-prev">上个月</button>

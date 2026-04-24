@@ -1,6 +1,6 @@
 {
   "scripts": {
-    "calendar:sync": "node calendar/data/official/sync-official-index.mjs",
+    "calendar:sync": "node scripts/sync-official-index.mjs",
     "prebuild:dev": "pnpm calendar:sync",
     "build:dev": "webpack --mode development",
     "prebuild": "pnpm calendar:sync",

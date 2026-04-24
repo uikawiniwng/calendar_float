@@ -2,12 +2,10 @@ import { SCRIPT_NAME } from './constants';
 import {
   buildCalendarBookControllerEntryContent,
   buildCalendarEventControllerEntryContent,
-  buildCalendarReminderControllerEntryContent,
   buildCalendarUpdateRulesEntryContent,
   buildCalendarVariableListEntryContent,
   getCalendarManagedBookEntryDescriptors,
   getCalendarManagedFestivalEntryDescriptors,
-  getCalendarManagedReminderEntryDescriptors,
   type CalendarManagedStaticEntryDescriptor,
 } from './managed-worldbook-content';
 import { getOfficialIndexData } from './official-data-loader';
@@ -19,28 +17,21 @@ const UPDATE_RULES_ENTRY_NAME = `[mvu_update]${MANAGED_ENTRY_PREFIX}[月历变�
 const VARIABLE_LIST_ENTRY_NAME = `${MANAGED_ENTRY_PREFIX}[变量列表]`;
 const EVENT_CONTROLLER_ENTRY_NAME = `${MANAGED_ENTRY_PREFIX}[controller][event]`;
 const BOOK_CONTROLLER_ENTRY_NAME = `${MANAGED_ENTRY_PREFIX}[controller][book]`;
-const REMINDER_CONTROLLER_ENTRY_NAME = `${MANAGED_ENTRY_PREFIX}[controller][reminder]`;
 const FESTIVAL_WRAPPER_START_ENTRY_NAME = '<节日>';
 const FESTIVAL_WRAPPER_END_ENTRY_NAME = '</节日>';
-const FESTIVAL_REMINDER_WRAPPER_START_ENTRY_NAME = '<festival_reminder>';
-const FESTIVAL_REMINDER_WRAPPER_END_ENTRY_NAME = '</festival_reminder>';
 const MANAGED_WORLDBOOK_STORAGE_KEY = `${SCRIPT_NAME}:managed-worldbook-enabled`;
-const CALENDAR_MANAGED_WORLDBOOK_VERSION = 'v3.1.0';
+const CALENDAR_MANAGED_WORLDBOOK_VERSION = 'v3.3.0';
 const DEFAULT_WORLDINFO_ORDER_BASE = 8800000;
 const FESTIVAL_WRAPPER_ORDER_START = 900;
 const FESTIVAL_EVENT_CONTROLLER_ORDER = 910;
 const FESTIVAL_BOOK_CONTROLLER_ORDER = 920;
 const FESTIVAL_WRAPPER_ORDER_END = 999;
-const FESTIVAL_REMINDER_WRAPPER_ORDER_START = 900;
-const FESTIVAL_REMINDER_CONTROLLER_ORDER = 910;
-const FESTIVAL_REMINDER_WRAPPER_ORDER_END = 999;
 const STORE_ONLY_KEY_PREFIX = '__calendar_float_store_only__';
 
 export const CALENDAR_MANAGED_ENTRY_PREFIX = MANAGED_ENTRY_PREFIX;
 
 const FESTIVAL_ENTRY_DESCRIPTORS = getCalendarManagedFestivalEntryDescriptors();
 const BOOK_ENTRY_DESCRIPTORS = getCalendarManagedBookEntryDescriptors();
-const REMINDER_ENTRY_DESCRIPTORS = getCalendarManagedReminderEntryDescriptors();
 
 function normalizeEntryName(name: unknown): string {
   return String(name || '').trim();
@@ -60,20 +51,8 @@ const EXPECTED_FESTIVAL_ENTRY_NAMES = new Set(
 const EXPECTED_BOOK_ENTRY_NAMES = new Set(
   BOOK_ENTRY_DESCRIPTORS.map(descriptor => buildManagedStaticEntryName(descriptor.kind, descriptor.entryLabel)),
 );
-const EXPECTED_REMINDER_ENTRY_NAMES = new Set(
-  REMINDER_ENTRY_DESCRIPTORS.map(descriptor => buildManagedStaticEntryName(descriptor.kind, descriptor.entryLabel)),
-);
-const EXPECTED_CONTROLLER_ENTRY_NAMES = new Set([
-  EVENT_CONTROLLER_ENTRY_NAME,
-  BOOK_CONTROLLER_ENTRY_NAME,
-  REMINDER_CONTROLLER_ENTRY_NAME,
-]);
-const EXPECTED_WRAPPER_ENTRY_NAMES = new Set([
-  FESTIVAL_WRAPPER_START_ENTRY_NAME,
-  FESTIVAL_WRAPPER_END_ENTRY_NAME,
-  FESTIVAL_REMINDER_WRAPPER_START_ENTRY_NAME,
-  FESTIVAL_REMINDER_WRAPPER_END_ENTRY_NAME,
-]);
+const EXPECTED_CONTROLLER_ENTRY_NAMES = new Set([EVENT_CONTROLLER_ENTRY_NAME, BOOK_CONTROLLER_ENTRY_NAME]);
+const EXPECTED_WRAPPER_ENTRY_NAMES = new Set([FESTIVAL_WRAPPER_START_ENTRY_NAME, FESTIVAL_WRAPPER_END_ENTRY_NAME]);
 const EXPECTED_MANAGED_ENTRY_NAMES = new Set([
   META_ENTRY_NAME,
   UPDATE_RULES_ENTRY_NAME,
@@ -82,7 +61,6 @@ const EXPECTED_MANAGED_ENTRY_NAMES = new Set([
   ...EXPECTED_WRAPPER_ENTRY_NAMES,
   ...EXPECTED_FESTIVAL_ENTRY_NAMES,
   ...EXPECTED_BOOK_ENTRY_NAMES,
-  ...EXPECTED_REMINDER_ENTRY_NAMES,
 ]);
 const EXPECTED_MANAGED_ENTRY_COUNT = EXPECTED_MANAGED_ENTRY_NAMES.size;
 
@@ -116,16 +94,12 @@ export interface CalendarManagedWorldbookDiagnostics {
   hasVariableListEntry: boolean;
   hasFestivalEntry: boolean;
   hasBookEntry: boolean;
-  hasReminderEntry: boolean;
   hasEventControllerEntry: boolean;
   hasBookControllerEntry: boolean;
-  hasReminderControllerEntry: boolean;
   festivalEntryCount: number;
   expectedFestivalEntryCount: number;
   bookEntryCount: number;
   expectedBookEntryCount: number;
-  reminderEntryCount: number;
-  expectedReminderEntryCount: number;
   controllerEntryCount: number;
   expectedControllerEntryCount: number;
   managedEntryCount: number;
@@ -138,7 +112,7 @@ export interface CalendarManagedWorldbookDiagnostics {
 }
 
 type ManagedWorldbookEntrySeed = Partial<WorldbookEntry>;
-type PositionSlot = 'after_character_definition' | 'd0' | 'd1';
+type PositionSlot = 'after_character_definition' | 'd1';
 
 const diagnostics: CalendarManagedWorldbookDiagnostics = {
   worldbookName: '',
@@ -156,16 +130,12 @@ const diagnostics: CalendarManagedWorldbookDiagnostics = {
   hasVariableListEntry: false,
   hasFestivalEntry: false,
   hasBookEntry: false,
-  hasReminderEntry: false,
   hasEventControllerEntry: false,
   hasBookControllerEntry: false,
-  hasReminderControllerEntry: false,
   festivalEntryCount: 0,
   expectedFestivalEntryCount: FESTIVAL_ENTRY_DESCRIPTORS.length,
   bookEntryCount: 0,
   expectedBookEntryCount: BOOK_ENTRY_DESCRIPTORS.length,
-  reminderEntryCount: 0,
-  expectedReminderEntryCount: REMINDER_ENTRY_DESCRIPTORS.length,
   controllerEntryCount: 0,
   expectedControllerEntryCount: EXPECTED_CONTROLLER_ENTRY_NAMES.size,
   managedEntryCount: 0,
@@ -249,7 +219,7 @@ function resolvePosition(slot: PositionSlot, order: number): WorldbookEntry['pos
   return {
     type: 'at_depth',
     role: 'system',
-    depth: slot === 'd0' ? 0 : 1,
+    depth: 1,
     order,
   };
 }
@@ -355,7 +325,6 @@ function buildManagedWorldbookEntries(): ManagedWorldbookEntrySeed[] {
   const officialIndex = getOfficialIndexData();
   const festivalDescriptorMap = new Map(FESTIVAL_ENTRY_DESCRIPTORS.map(descriptor => [descriptor.id, descriptor]));
   const bookDescriptorMap = new Map(BOOK_ENTRY_DESCRIPTORS.map(descriptor => [descriptor.id, descriptor]));
-  const reminderDescriptorMap = new Map(REMINDER_ENTRY_DESCRIPTORS.map(descriptor => [descriptor.id, descriptor]));
 
   const eventControllerFestivals = officialIndex.festivals
     .map(item => {
@@ -389,37 +358,12 @@ function buildManagedWorldbookEntries(): ManagedWorldbookEntrySeed[] {
     })
     .filter((item): item is NonNullable<typeof item> => Boolean(item));
 
-  const reminderControllerFestivals = officialIndex.festivals
-    .map(item => {
-      const upcomingDescriptor = reminderDescriptorMap.get(`${item.id}_upcoming_reminder`);
-      const activeDescriptor = reminderDescriptorMap.get(`${item.id}_active_reminder`);
-      if (!upcomingDescriptor || !activeDescriptor) {
-        return null;
-      }
-      return {
-        id: item.id,
-        upcomingEntryName: buildManagedStaticEntryName('reminder', upcomingDescriptor.entryLabel),
-        activeEntryName: buildManagedStaticEntryName('reminder', activeDescriptor.entryLabel),
-        title: item.title,
-        start: item.start,
-        end: item.end,
-        controller: item.controller,
-      };
-    })
-    .filter((item): item is NonNullable<typeof item> => Boolean(item));
-
-  const festivalContentDescriptors = [...FESTIVAL_ENTRY_DESCRIPTORS, ...BOOK_ENTRY_DESCRIPTORS];
-  const festivalContentOrders = allocateSequentialOrders(
+  const contentDescriptors = [...FESTIVAL_ENTRY_DESCRIPTORS, ...BOOK_ENTRY_DESCRIPTORS];
+  const contentOrders = allocateSequentialOrders(
     FESTIVAL_BOOK_CONTROLLER_ORDER + 1,
     FESTIVAL_WRAPPER_ORDER_END - 1,
-    festivalContentDescriptors.length,
+    contentDescriptors.length,
     '节日 event/book 条目',
-  );
-  const reminderContentOrders = allocateSequentialOrders(
-    FESTIVAL_REMINDER_CONTROLLER_ORDER + 1,
-    FESTIVAL_REMINDER_WRAPPER_ORDER_END - 1,
-    REMINDER_ENTRY_DESCRIPTORS.length,
-    '节日提醒条目',
   );
 
   const entries: ManagedWorldbookEntrySeed[] = [
@@ -444,29 +388,6 @@ function buildManagedWorldbookEntries(): ManagedWorldbookEntrySeed[] {
       order: DEFAULT_WORLDINFO_ORDER_BASE + 20,
       slot: 'd1',
       entryKind: 'variable_list',
-    }),
-    buildManagedConstantEntry({
-      name: FESTIVAL_REMINDER_WRAPPER_START_ENTRY_NAME,
-      content: '<festival_reminder>',
-      order: FESTIVAL_REMINDER_WRAPPER_ORDER_START,
-      slot: 'd0',
-      entryKind: 'wrapper_reminder_start',
-    }),
-    buildManagedConstantEntry({
-      name: REMINDER_CONTROLLER_ENTRY_NAME,
-      content: buildCalendarReminderControllerEntryContent({
-        festivals: reminderControllerFestivals,
-      }),
-      order: FESTIVAL_REMINDER_CONTROLLER_ORDER,
-      slot: 'd0',
-      entryKind: 'controller_reminder',
-    }),
-    buildManagedConstantEntry({
-      name: FESTIVAL_REMINDER_WRAPPER_END_ENTRY_NAME,
-      content: '</festival_reminder>',
-      order: FESTIVAL_REMINDER_WRAPPER_ORDER_END,
-      slot: 'd0',
-      entryKind: 'wrapper_reminder_end',
     }),
     buildManagedConstantEntry({
       name: FESTIVAL_WRAPPER_START_ENTRY_NAME,
@@ -502,21 +423,11 @@ function buildManagedWorldbookEntries(): ManagedWorldbookEntrySeed[] {
     }),
   ];
 
-  REMINDER_ENTRY_DESCRIPTORS.forEach((descriptor, index) => {
+  contentDescriptors.forEach((descriptor, index) => {
     entries.push(
       buildManagedStoreOnlyEntry({
         descriptor,
-        order: reminderContentOrders[index],
-        slot: 'd0',
-      }),
-    );
-  });
-
-  festivalContentDescriptors.forEach((descriptor, index) => {
-    entries.push(
-      buildManagedStoreOnlyEntry({
-        descriptor,
-        order: festivalContentOrders[index],
+        order: contentOrders[index],
         slot: 'after_character_definition',
       }),
     );
@@ -571,7 +482,6 @@ function syncEntryDiagnostics(entries: WorldbookEntry[], worldbookName: string):
   diagnostics.hasVariableListEntry = Boolean(readManagedEntry(entries, VARIABLE_LIST_ENTRY_NAME));
   diagnostics.hasEventControllerEntry = Boolean(readManagedEntry(entries, EVENT_CONTROLLER_ENTRY_NAME));
   diagnostics.hasBookControllerEntry = Boolean(readManagedEntry(entries, BOOK_CONTROLLER_ENTRY_NAME));
-  diagnostics.hasReminderControllerEntry = Boolean(readManagedEntry(entries, REMINDER_CONTROLLER_ENTRY_NAME));
 
   const festivalEntryCount = entries.filter(
     entry => isManagedWorldbookEntry(entry) && EXPECTED_FESTIVAL_ENTRY_NAMES.has(normalizeEntryName(entry.name)),
@@ -579,19 +489,14 @@ function syncEntryDiagnostics(entries: WorldbookEntry[], worldbookName: string):
   const bookEntryCount = entries.filter(
     entry => isManagedWorldbookEntry(entry) && EXPECTED_BOOK_ENTRY_NAMES.has(normalizeEntryName(entry.name)),
   ).length;
-  const reminderEntryCount = entries.filter(
-    entry => isManagedWorldbookEntry(entry) && EXPECTED_REMINDER_ENTRY_NAMES.has(normalizeEntryName(entry.name)),
-  ).length;
   const controllerEntryCount = entries.filter(
     entry => isManagedWorldbookEntry(entry) && EXPECTED_CONTROLLER_ENTRY_NAMES.has(normalizeEntryName(entry.name)),
   ).length;
 
   diagnostics.hasFestivalEntry = festivalEntryCount > 0;
   diagnostics.hasBookEntry = bookEntryCount > 0;
-  diagnostics.hasReminderEntry = reminderEntryCount > 0;
   diagnostics.festivalEntryCount = festivalEntryCount;
   diagnostics.bookEntryCount = bookEntryCount;
-  diagnostics.reminderEntryCount = reminderEntryCount;
   diagnostics.controllerEntryCount = controllerEntryCount;
   diagnostics.managedEntryCount = entries.filter(entry => isManagedWorldbookEntry(entry)).length;
   diagnostics.allManagedEntriesPresent = [...EXPECTED_MANAGED_ENTRY_NAMES].every(entryName =>
@@ -626,6 +531,37 @@ async function readCharacterPrimaryWorldbookEntries(): Promise<{ worldbookName: 
   return { worldbookName, entries };
 }
 
+async function readWorldbookEntriesByName(
+  worldbookName: string,
+  options?: { createIfMissing?: boolean },
+): Promise<{ worldbookName: string; entries: WorldbookEntry[]; existed: boolean }> {
+  const normalizedWorldbookName = normalizeEntryName(worldbookName);
+  if (!normalizedWorldbookName) {
+    throw new Error('worldbook 名称不能为空');
+  }
+
+  try {
+    const entries = await getWorldbook(normalizedWorldbookName);
+    return {
+      worldbookName: normalizedWorldbookName,
+      entries,
+      existed: true,
+    };
+  } catch (error) {
+    if (!options?.createIfMissing) {
+      throw error;
+    }
+
+    await createOrReplaceWorldbook(normalizedWorldbookName, []);
+    const entries = await getWorldbook(normalizedWorldbookName);
+    return {
+      worldbookName: normalizedWorldbookName,
+      entries,
+      existed: false,
+    };
+  }
+}
+
 function assertManagedEntriesWritten(entries: WorldbookEntry[], desiredEntries: ManagedWorldbookEntrySeed[]): void {
   const missingNames: string[] = [];
   const emptyContentNames: string[] = [];
@@ -654,22 +590,12 @@ function assertManagedEntriesWritten(entries: WorldbookEntry[], desiredEntries: 
   }
 }
 
-async function upsertManagedEntries(): Promise<EnsureCalendarManagedWorldbookEntriesResult> {
-  diagnostics.managementEnabled = isManagementEnabled();
-  if (!diagnostics.managementEnabled) {
-    diagnostics.connectivity = 'missing';
-    diagnostics.lastEnsureSucceeded = true;
-    diagnostics.updatedDuringEnsure = false;
-    diagnostics.createdDuringEnsure = false;
-    diagnostics.worldbookName = readCurrentCharacterPrimaryWorldbookName();
-    return {
-      name: diagnostics.worldbookName,
-      created: false,
-      updated: false,
-    };
-  }
-
-  const { worldbookName, entries } = await readCharacterPrimaryWorldbookEntries();
+async function upsertManagedEntriesToTargetWorldbook(args: {
+  worldbookName: string;
+  entries: WorldbookEntry[];
+  syncDiagnostics: boolean;
+}): Promise<EnsureCalendarManagedWorldbookEntriesResult> {
+  const { worldbookName, entries, syncDiagnostics } = args;
   const desiredEntries = buildManagedWorldbookEntries();
   const desiredEntryNames = new Set(desiredEntries.map(entry => normalizeEntryName(entry.name)));
   const existingManagedMap = new Map(
@@ -701,24 +627,51 @@ async function upsertManagedEntries(): Promise<EnsureCalendarManagedWorldbookEnt
 
   const refreshedEntries = await getWorldbook(worldbookName);
   assertManagedEntriesWritten(refreshedEntries, desiredEntries);
-  syncEntryDiagnostics(refreshedEntries, worldbookName);
-  diagnostics.existsInRegistry = normalizeWorldbookNameList(getWorldbookNames()).includes(worldbookName);
-  diagnostics.foundByScript = true;
-  diagnostics.createdDuringEnsure = missingEntries.length > 0;
-  diagnostics.updatedDuringEnsure =
-    diagnostics.createdDuringEnsure ||
+  const updated =
+    missingEntries.length > 0 ||
     refreshedEntries.filter(
       entry => isManagedWorldbookEntry(entry) && desiredEntryNames.has(normalizeEntryName(entry.name)),
     ).length === desiredEntries.length;
-  diagnostics.lastEnsureSucceeded = true;
-  diagnostics.connectivity = diagnostics.allManagedEntriesPresent ? 'ready' : 'missing';
-  resetDiagnosticsError();
+
+  if (syncDiagnostics) {
+    syncEntryDiagnostics(refreshedEntries, worldbookName);
+    diagnostics.existsInRegistry = normalizeWorldbookNameList(getWorldbookNames()).includes(worldbookName);
+    diagnostics.foundByScript = true;
+    diagnostics.createdDuringEnsure = missingEntries.length > 0;
+    diagnostics.updatedDuringEnsure = updated;
+    diagnostics.lastEnsureSucceeded = true;
+    diagnostics.connectivity = diagnostics.allManagedEntriesPresent ? 'ready' : 'missing';
+    resetDiagnosticsError();
+  }
 
   return {
     name: worldbookName,
-    created: diagnostics.createdDuringEnsure,
-    updated: diagnostics.updatedDuringEnsure,
+    created: missingEntries.length > 0,
+    updated,
   };
+}
+
+async function upsertManagedEntries(): Promise<EnsureCalendarManagedWorldbookEntriesResult> {
+  diagnostics.managementEnabled = isManagementEnabled();
+  if (!diagnostics.managementEnabled) {
+    diagnostics.connectivity = 'missing';
+    diagnostics.lastEnsureSucceeded = true;
+    diagnostics.updatedDuringEnsure = false;
+    diagnostics.createdDuringEnsure = false;
+    diagnostics.worldbookName = readCurrentCharacterPrimaryWorldbookName();
+    return {
+      name: diagnostics.worldbookName,
+      created: false,
+      updated: false,
+    };
+  }
+
+  const { worldbookName, entries } = await readCharacterPrimaryWorldbookEntries();
+  return upsertManagedEntriesToTargetWorldbook({
+    worldbookName,
+    entries,
+    syncDiagnostics: true,
+  });
 }
 
 async function refreshDiagnosticsFromCharacterWorldbook(): Promise<void> {
@@ -736,13 +689,10 @@ async function refreshDiagnosticsFromCharacterWorldbook(): Promise<void> {
     diagnostics.hasVariableListEntry = false;
     diagnostics.hasFestivalEntry = false;
     diagnostics.hasBookEntry = false;
-    diagnostics.hasReminderEntry = false;
     diagnostics.hasEventControllerEntry = false;
     diagnostics.hasBookControllerEntry = false;
-    diagnostics.hasReminderControllerEntry = false;
     diagnostics.festivalEntryCount = 0;
     diagnostics.bookEntryCount = 0;
-    diagnostics.reminderEntryCount = 0;
     diagnostics.controllerEntryCount = 0;
     diagnostics.managedEntryCount = 0;
     diagnostics.allManagedEntriesPresent = false;
@@ -783,8 +733,6 @@ export async function syncCalendarManagedCharacterEntries(): Promise<EnsureCalen
       expectedFestivalEntryCount: diagnostics.expectedFestivalEntryCount,
       bookEntryCount: diagnostics.bookEntryCount,
       expectedBookEntryCount: diagnostics.expectedBookEntryCount,
-      reminderEntryCount: diagnostics.reminderEntryCount,
-      expectedReminderEntryCount: diagnostics.expectedReminderEntryCount,
       controllerEntryCount: diagnostics.controllerEntryCount,
       expectedControllerEntryCount: diagnostics.expectedControllerEntryCount,
     });
@@ -858,6 +806,32 @@ export async function installCalendarManagedWorldbookEntries(): Promise<EnsureCa
     });
     throw error;
   }
+}
+
+export async function installCalendarManagedEntriesToExternalWorldbook(
+  worldbookName: string,
+): Promise<EnsureCalendarManagedWorldbookEntriesResult> {
+  const {
+    worldbookName: targetWorldbookName,
+    entries,
+    existed,
+  } = await readWorldbookEntriesByName(worldbookName, {
+    createIfMissing: true,
+  });
+  const result = await upsertManagedEntriesToTargetWorldbook({
+    worldbookName: targetWorldbookName,
+    entries,
+    syncDiagnostics: false,
+  });
+  emitManagedWorldbookDebugLog(
+    existed ? '已更新外部 worldbook backend 条目' : '已创建外部 worldbook 并写入 backend 条目',
+    {
+      worldbookName: targetWorldbookName,
+      created: result.created,
+      updated: result.updated,
+    },
+  );
+  return result;
 }
 
 export async function ensureCalendarManagedWorldbookEntries(): Promise<EnsureCalendarManagedWorldbookEntriesResult> {

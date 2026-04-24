@@ -118,7 +118,7 @@ function buildOfficialFestivalRecords(now: DatePoint): FestivalRecord[] {
       range: ensureRangeOrder({ start, end }),
       metadata: {
         source: 'official_repo',
-        index: 'calendar/data/official/index.json',
+        index: 'public/assets/data/index.yaml',
         content_file: node.content_file,
         monthDayRange: `${formatMonthDay(start)}~${formatMonthDay(end)}`,
         official: true,

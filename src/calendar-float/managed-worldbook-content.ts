@@ -7,17 +7,14 @@ import type {
 } from './types';
 
 const MANAGED_REFERENCE_PLACEHOLDER = 'not yet write lmao';
-const DEFAULT_REMINDER_DAYS = 7;
 const CONTROLLER_LOCATION_VARIABLE = 'stat_data.世界.地点';
 const CONTROLLER_TIME_VARIABLE = 'stat_data.世界.时间';
-
-type ReminderDescriptorKind = 'upcoming' | 'active';
 
 export interface CalendarManagedStaticEntryDescriptor {
   id: string;
   entryLabel: string;
   title: string;
-  kind: 'event' | 'book' | 'reminder';
+  kind: 'event' | 'book';
   content: string;
 }
 
@@ -35,16 +32,6 @@ export interface CalendarManagedBookControllerTarget {
   entryName: string;
   title: string;
   controller?: OfficialBookControllerConfig;
-}
-
-export interface CalendarManagedReminderControllerTarget {
-  id: string;
-  upcomingEntryName: string;
-  activeEntryName: string;
-  title: string;
-  start: string;
-  end: string;
-  controller?: OfficialFestivalControllerConfig;
 }
 
 function normalizeEntryLabel(label: string): string {
@@ -142,28 +129,6 @@ function enumerateMonthDayPoints(startText: string, endText: string): Array<{ mo
   return points;
 }
 
-function enumerateReminderPreheatPoints(
-  startText: string,
-  reminderDays: number,
-): Array<{ month: number; day: number }> {
-  const startPoint = parseMonthDayText(startText);
-  if (!startPoint || reminderDays <= 0) {
-    return [];
-  }
-
-  const startDate = toUtcDate(startPoint, 2024);
-  const points: Array<{ month: number; day: number }> = [];
-  for (let offset = reminderDays; offset >= 1; offset -= 1) {
-    const cursor = new Date(startDate.getTime());
-    cursor.setUTCDate(cursor.getUTCDate() - offset);
-    points.push({
-      month: cursor.getUTCMonth() + 1,
-      day: cursor.getUTCDate(),
-    });
-  }
-  return points;
-}
-
 export function buildMonthDayRegexSource(month: number, day: number): string {
   return String.raw`(?:^|[^0-9])0?${month}(?:月)?(?:[-/])?0?${day}(?:日)?(?=[^0-9]|$)`;
 }
@@ -180,10 +145,6 @@ function buildRegexSourcesFromPoints(points: Array<{ month: number; day: number 
 
 function buildRangeRegexSources(startText: string, endText: string): string[] {
   return buildRegexSourcesFromPoints(enumerateMonthDayPoints(startText, endText));
-}
-
-function buildPreheatRegexSources(startText: string, reminderDays: number): string[] {
-  return buildRegexSourcesFromPoints(enumerateReminderPreheatPoints(startText, reminderDays));
 }
 
 function buildStaticEntryContent(args: { kind: 'event' | 'book'; title: string; contentFile: string }): string {
@@ -226,14 +187,6 @@ function buildBookDescriptor(item: OfficialBookIndexItem): CalendarManagedStatic
   };
 }
 
-function buildReminderEntryLabel(baseLabel: string, mode: ReminderDescriptorKind): string {
-  return `${baseLabel}·${mode === 'upcoming' ? '活动提醒' : '当前活动强调'}`;
-}
-
-export function buildReminderDescriptorId(festivalId: string, mode: ReminderDescriptorKind): string {
-  return `${String(festivalId || '').trim()}_${mode}_reminder`;
-}
-
 function normalizeFestivalControllerConfig(
   item: OfficialFestivalIndexItem,
   duplicatedTitleCounts: Map<string, number>,
@@ -241,22 +194,17 @@ function normalizeFestivalControllerConfig(
   enabled: boolean;
   locationKeywords: string[];
   mentionKeywords: string[];
-  reminderDays: number;
 } {
   const controller = item.controller ?? {};
   const locationKeywords = normalizeKeywordList(controller.location_keywords);
   const mentionKeywords = normalizeKeywordList(controller.mention_keywords);
   const fallbackMentionKeywords =
     (duplicatedTitleCounts.get(normalizeEntryLabel(item.title)) ?? 0) > 1 ? [] : [item.title];
-  const normalizedReminderDays = Number.isInteger(controller.reminder_days)
-    ? Math.max(0, Number(controller.reminder_days))
-    : DEFAULT_REMINDER_DAYS;
 
   return {
     enabled: controller.enabled !== false,
     locationKeywords,
     mentionKeywords: mentionKeywords.length > 0 ? mentionKeywords : fallbackMentionKeywords,
-    reminderDays: normalizedReminderDays,
   };
 }
 
@@ -281,56 +229,12 @@ function normalizeBookControllerConfig(item: OfficialBookIndexItem): {
   };
 }
 
-function buildFestivalReminderEntryContent(item: OfficialFestivalIndexItem, mode: ReminderDescriptorKind): string {
-  return mode === 'upcoming'
-    ? [
-        `近期提醒：${item.title} 即将开始。`,
-        '若当前场景地点与该节庆举办地一致，且时间临近，可优先参考对应节庆与关联读物。',
-      ].join('\n\n')
-    : [
-        `当前提醒：${item.title} 正在进行中。`,
-        '若当前场景地点与该节庆举办地一致，或对话已直接提及该节庆，应优先结合相关节庆正文与关联读物信息。',
-      ].join('\n\n');
-}
-
-function buildFestivalReminderDescriptor(
-  item: OfficialFestivalIndexItem,
-  duplicatedTitleCounts: Map<string, number>,
-  mode: ReminderDescriptorKind,
-): CalendarManagedStaticEntryDescriptor {
-  const baseLabel = normalizeFestivalEntryLabel(item, duplicatedTitleCounts);
-  return {
-    id: buildReminderDescriptorId(item.id, mode),
-    entryLabel: buildReminderEntryLabel(baseLabel, mode),
-    title: normalizeEntryLabel(item.title),
-    kind: 'reminder',
-    content: buildFestivalReminderEntryContent(item, mode),
-  };
-}
-
-export function getCalendarManagedReminderEntryDescriptors(): CalendarManagedStaticEntryDescriptor[] {
-  const festivals = getOfficialIndexData().festivals;
-  const duplicatedTitleCounts = getFestivalDuplicatedTitleCounts();
-
-  return festivals.flatMap(item => {
-    const controller = normalizeFestivalControllerConfig(item, duplicatedTitleCounts);
-    if (!controller.enabled) {
-      return [];
-    }
-
-    return [
-      buildFestivalReminderDescriptor(item, duplicatedTitleCounts, 'upcoming'),
-      buildFestivalReminderDescriptor(item, duplicatedTitleCounts, 'active'),
-    ];
-  });
-}
-
 /**
  * 这组 builder 只负责 worldbook backend 的内容层：
- * - event / book / reminder / variable / update rule 的正文
+ * - event / book / variable / update rule 的正文
  * - controller entry 的 EJS 内容
  *
- * script 侧不再负责 prompt 注入，不再负责 trigger。
+ * reminder 已改为独立 prompt 注入链路，不再写入 managed worldbook。
  */
 export function buildCalendarVariableListEntryContent(): string {
   return [
@@ -493,69 +397,6 @@ export function buildCalendarBookControllerEntryContent(args: {
   ].join('\n');
 
   return assertValidGeneratedEjsScript(content, 'calendar book controller');
-}
-
-export function buildCalendarReminderControllerEntryContent(args: {
-  festivals: CalendarManagedReminderControllerTarget[];
-}): string {
-  const duplicatedTitleCounts = getFestivalDuplicatedTitleCounts();
-  const rules = args.festivals
-    .map(item => {
-      const sourceItem = getOfficialIndexData().festivals.find(festival => festival.id === item.id);
-      if (!sourceItem) {
-        return null;
-      }
-
-      const controller = normalizeFestivalControllerConfig(sourceItem, duplicatedTitleCounts);
-      if (!controller.enabled) {
-        return null;
-      }
-
-      return {
-        upcoming_entry_name: item.upcomingEntryName,
-        active_entry_name: item.activeEntryName,
-        location_keywords: controller.locationKeywords,
-        mention_keywords: controller.mentionKeywords,
-        preheat_regex_sources: buildPreheatRegexSources(item.start, controller.reminderDays),
-        active_regex_sources: buildRangeRegexSources(item.start, item.end),
-      };
-    })
-    .filter((rule): rule is NonNullable<typeof rule> => Boolean(rule));
-
-  const content = [
-    '<%_',
-    `const calendarReminderCurrentLocation = String(getvar('${CONTROLLER_LOCATION_VARIABLE}', { defaults: '' }) || '');`,
-    `const calendarReminderCurrentTime = String(getvar('${CONTROLLER_TIME_VARIABLE}', { defaults: '' }) || '');`,
-    `const calendarReminderRules = ${JSON.stringify(rules)};`,
-    'const calendarReminderMatchedEntryNames = [];',
-    'const calendarReminderSeen = new Set();',
-    'for (const rule of calendarReminderRules) {',
-    '  const calendarReminderLocationMatched =',
-    '    rule.location_keywords.length > 0 && rule.location_keywords.some(keyword => calendarReminderCurrentLocation.includes(keyword));',
-    '  const calendarReminderPreheatMatched = rule.preheat_regex_sources.some(source => new RegExp(source).test(calendarReminderCurrentTime));',
-    '  const calendarReminderActiveMatched = rule.active_regex_sources.some(source => new RegExp(source).test(calendarReminderCurrentTime));',
-    '  const calendarReminderMentionMatched =',
-    "    typeof matchChatMessages === 'function' && rule.mention_keywords.length > 0",
-    '      ? matchChatMessages(rule.mention_keywords)',
-    '      : false;',
-    '  const calendarReminderTargetEntryName =',
-    '    calendarReminderLocationMatched && calendarReminderPreheatMatched && !calendarReminderActiveMatched',
-    '      ? rule.upcoming_entry_name',
-    '      : (calendarReminderLocationMatched && calendarReminderActiveMatched) || calendarReminderMentionMatched',
-    '        ? rule.active_entry_name',
-    '        : null;',
-    '  if (calendarReminderTargetEntryName && !calendarReminderSeen.has(calendarReminderTargetEntryName)) {',
-    '    calendarReminderSeen.add(calendarReminderTargetEntryName);',
-    '    calendarReminderMatchedEntryNames.push(calendarReminderTargetEntryName);',
-    '  }',
-    '}',
-    '_%>',
-    '<%_ for (const entryName of calendarReminderMatchedEntryNames) { _%>',
-    buildGetwiBlock('entryName'),
-    '<%_ } _%>',
-  ].join('\n');
-
-  return assertValidGeneratedEjsScript(content, 'calendar reminder controller');
 }
 
 export function getCalendarManagedFestivalEntryDescriptors(): CalendarManagedStaticEntryDescriptor[] {

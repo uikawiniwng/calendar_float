@@ -4,6 +4,7 @@ import { formatDateKey } from './date';
 import { saveCalendarForm } from './form-service';
 import {
   getCalendarManagedWorldbookDiagnostics,
+  installCalendarManagedEntriesToExternalWorldbook,
   installCalendarManagedWorldbookEntries,
   uninstallCalendarManagedWorldbookEntries,
   type CalendarManagedWorldbookDiagnostics,
@@ -13,6 +14,7 @@ import { buildSelectedDayDetail, fallbackDateLabel, renderFormHtml } from './ren
 import {
   archiveCompletedEvent,
   ensureMvuReady,
+  getAvailableCalendarWorldbooks,
   readActiveBuckets,
   readArchiveStore,
   readCurrentWorldTime,
@@ -346,7 +348,6 @@ function buildManagedWorldbookSummaryLines(diagnostics: CalendarManagedWorldbook
     `变量列表: ${diagnostics.hasVariableListEntry ? '是' : '否'}`,
     `mvu_update: ${diagnostics.hasUpdateRulesEntry ? '是' : '否'}`,
     `controller: ${diagnostics.controllerEntryCount}/${diagnostics.expectedControllerEntryCount}`,
-    `reminder: ${diagnostics.reminderEntryCount}/${diagnostics.expectedReminderEntryCount}`,
     `event: ${diagnostics.festivalEntryCount}/${diagnostics.expectedFestivalEntryCount}`,
     `book: ${diagnostics.bookEntryCount}/${diagnostics.expectedBookEntryCount}`,
     `条目完整: ${diagnostics.allManagedEntriesPresent ? '是' : '否'}`,
@@ -477,6 +478,7 @@ function renderManagedWorldbookDialog(): void {
   let actionHtml = [
     `<button type="button" class="th-btn th-managed-worldbook-dialog-btn is-danger" data-action="managed-worldbook-menu-uninstall" ${uninstallDisabled ? 'disabled' : ''}>uninstall</button>`,
     '<button type="button" class="th-btn th-primary-btn th-managed-worldbook-dialog-btn" data-action="managed-worldbook-menu-reinstall">reinstall</button>',
+    '<button type="button" class="th-btn th-managed-worldbook-dialog-btn" data-action="managed-worldbook-menu-export-external">export to external worldbook</button>',
     '<button type="button" class="th-btn th-managed-worldbook-dialog-btn" data-action="managed-worldbook-dialog-return">return</button>',
   ].join('');
 
@@ -527,6 +529,9 @@ function renderManagedWorldbookDialog(): void {
   });
   bindClick('[data-action="managed-worldbook-menu-reinstall"]', () => {
     openManagedWorldbookDialog('confirm-reinstall', diagnostics);
+  });
+  bindClick('[data-action="managed-worldbook-menu-export-external"]', () => {
+    void promptExternalManagedWorldbookInstall();
   });
   bindClick('[data-action="managed-worldbook-confirm-uninstall"]', () => {
     void confirmManagedWorldbookUninstall();
@@ -869,6 +874,64 @@ async function handleManagedWorldbookClick(): Promise<void> {
   }
 
   openManagedWorldbookDialog('menu', diagnostics);
+}
+
+function buildExternalWorldbookPromptPayload(): {
+  message: string;
+  suggestedName: string;
+} {
+  const diagnostics = getCalendarManagedWorldbookDiagnostics();
+  const availableNames = getAvailableCalendarWorldbooks()
+    .map(name => String(name || '').trim())
+    .filter(Boolean);
+  const suggestedName = availableNames.find(name => name !== diagnostics.worldbookName) ?? `${SCRIPT_NAME}-backend`;
+  const listedNames =
+    availableNames.length > 0
+      ? availableNames
+          .slice(0, 12)
+          .map(name => `- ${name}`)
+          .join('\n')
+      : '（当前没有可复用的 worldbook，可直接输入新名称创建）';
+
+  return {
+    suggestedName,
+    message: [
+      '请输入外部 worldbook 名称。',
+      '可填写已有 worldbook 名称，或输入新名称自动创建。',
+      `当前主 worldbook：${diagnostics.worldbookName || '（未绑定）'}`,
+      '可用 worldbook：',
+      listedNames,
+    ].join('\n'),
+  };
+}
+
+async function promptExternalManagedWorldbookInstall(): Promise<void> {
+  if (uiState.managedWorldbookBusy) {
+    return;
+  }
+
+  const { message, suggestedName } = buildExternalWorldbookPromptPayload();
+  const targetName = String(hostWindow.prompt(message, suggestedName) || '').trim();
+  if (!targetName) {
+    return;
+  }
+
+  uiState.managedWorldbookDialogOpen = false;
+  uiState.managedWorldbookDialogMode = null;
+  uiState.managedWorldbookDialogDiagnostics = null;
+  uiState.managedWorldbookBusy = true;
+  renderShell();
+  try {
+    const result = await installCalendarManagedEntriesToExternalWorldbook(targetName);
+    console.info(`[${SCRIPT_NAME}] 已将 backend 条目写入外部 worldbook`, result);
+    hostWindow.alert(`已将 backend 条目写入外部 worldbook\nWorldbook: ${result.name}`);
+  } catch (error) {
+    console.warn(`[${SCRIPT_NAME}] 写入外部 worldbook backend 条目失败`, error);
+    hostWindow.alert(`写入外部 worldbook 失败：${error instanceof Error ? error.message : String(error)}`);
+  } finally {
+    uiState.managedWorldbookBusy = false;
+    renderShell();
+  }
 }
 
 async function confirmManagedWorldbookUninstall(): Promise<void> {
