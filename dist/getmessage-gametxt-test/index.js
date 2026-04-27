@@ -1,0 +1,2 @@
+function t(){const t=getChatMessages('-2-{{lastMessageId}}',{role:'all',hide_state:'all'}).slice(-2),e=t.some(t=>{return(e=t.message,[...String(e||'').matchAll(/<gametxt>([\s\S]*?)<\/gametxt>/gi)].map(t=>String(t[1]||'').trim()).filter(Boolean)).length>0;var e});console.info('[getmessage-gametxt-test] latest two messages',t),e?toastr.success('Found <gametxt> in getChatMessages()'):toastr.warning('Not found <gametxt> in getChatMessages()')}$(()=>{t()});
+//# sourceMappingURL=index.js.map

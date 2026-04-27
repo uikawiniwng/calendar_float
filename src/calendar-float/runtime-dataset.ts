@@ -1,0 +1,228 @@
+/**
+ * 负责：把 runtime worldbook 索引与正文解析结果，组装成 UI 直接使用的 CalendarDataset。
+ * 不负责：实际触发 scan，也不负责 worldbook backend 基础设施安装。
+ * 上游依赖：[`./runtime-worldbook-loader.ts`](src/calendar-float/runtime-worldbook-loader.ts) 与 [`./runtime-trigger-evaluator.ts`](src/calendar-float/runtime-trigger-evaluator.ts)。
+ */
+import { FIXED_FESTIVALS } from './constants';
+import {
+  compareDatePoint,
+  ensureRangeOrder,
+  formatMonthDay,
+  inferAnchorYear,
+  normalizeMonthDayText,
+  parseMonthDayWithYear,
+} from './date';
+import {
+  resolveCalendarBookAbstract,
+  resolveCalendarContentNode,
+  type 日历运行时触发上下文,
+} from './runtime-trigger-evaluator';
+import { readCalendarRuntimeIndex, resolveCalendarRuntimeWorldbookSources } from './runtime-worldbook-loader';
+import type { 日历运行时书籍条目, 日历运行时节庆条目 } from './runtime-worldbook-types';
+import {
+  buildSuggestionSet,
+  collectEventTags,
+  readActiveBuckets,
+  readArchiveStore,
+  readCurrentWorldTime,
+} from './storage';
+import type {
+  ArchivedCalendarEvent,
+  CalendarBookRecord,
+  CalendarDataset,
+  CalendarEventRecord,
+  DatePoint,
+  FestivalRecord,
+  RawCalendarEvent,
+} from './types';
+
+function buildRuntimeContext(now: DatePoint): 日历运行时触发上下文 {
+  return {
+    当前日期: now,
+    最近消息文本: [],
+    变量表: {},
+  };
+}
+
+function parseEventTextToPoint(text: string, now: DatePoint): DatePoint | null {
+  const normalized = String(text || '').trim();
+  if (!normalized) {
+    return null;
+  }
+
+  const fantasy = normalized.match(/(?:复兴纪元)?\s*(\d+)\s*年[-/ ]?(\d{1,2})\s*月[-/ ]?(\d{1,2})\s*日/);
+  if (fantasy) {
+    return {
+      year: Number(fantasy[1]),
+      month: Number(fantasy[2]),
+      day: Number(fantasy[3]),
+    };
+  }
+
+  const full = normalized.match(/(\d{4})[/-](\d{1,2})[/-](\d{1,2})/);
+  if (full) {
+    return {
+      year: Number(full[1]),
+      month: Number(full[2]),
+      day: Number(full[3]),
+    };
+  }
+
+  const monthDay = normalized.match(/(\d{1,2})[-/月](\d{1,2})日?/);
+  if (!monthDay) {
+    return null;
+  }
+  return parseMonthDayWithYear(`${monthDay[1]}-${monthDay[2]}`, now.year);
+}
+
+function mapActiveEvent(type: '临时' | '重复', id: string, raw: RawCalendarEvent, now: DatePoint): CalendarEventRecord {
+  const start = parseEventTextToPoint(raw.时间 || '', now);
+  const end = parseEventTextToPoint(raw.结束时间 || raw.时间 || '', now);
+  return {
+    source: 'active',
+    id,
+    type,
+    title: String(raw.标题 || '').trim() || id,
+    content: String(raw.内容 || '').trim(),
+    startText: String(raw.时间 || '').trim(),
+    endText: String(raw.结束时间 || '').trim(),
+    repeatRule: raw.重复规则 || '无',
+    tags: collectEventTags(id, { 标题: String(raw.标题 || ''), 内容: String(raw.内容 || '') }),
+    allDay: true,
+    raw,
+    range: start && end ? { start, end: compareDatePoint(start, end) <= 0 ? end : start } : undefined,
+    relatedBookIds: [],
+    metadata: {},
+  };
+}
+
+function mapArchivedEvent(id: string, raw: ArchivedCalendarEvent, now: DatePoint): CalendarEventRecord {
+  const start = parseEventTextToPoint(raw.时间 || '', now);
+  const end = parseEventTextToPoint(raw.结束时间 || raw.时间 || '', now);
+  return {
+    source: 'archive',
+    id,
+    type: raw.type || '临时',
+    title: String(raw.标题 || '').trim() || id,
+    content: String(raw.内容 || '').trim(),
+    startText: String(raw.时间 || '').trim(),
+    endText: String(raw.结束时间 || '').trim(),
+    repeatRule: raw.重复规则 || '无',
+    tags: raw.tags,
+    allDay: true,
+    raw,
+    range: start && end ? { start, end: compareDatePoint(start, end) <= 0 ? end : start } : undefined,
+    relatedBookIds: [],
+    metadata: {
+      archived_at: raw.archived_at,
+      completed_at: raw.completed_at,
+    },
+  };
+}
+
+function buildFestivalRange(festival: 日历运行时节庆条目, now: DatePoint) {
+  const startText = normalizeMonthDayText(String(festival.开始 || ''));
+  const endText = normalizeMonthDayText(String(festival.结束 || festival.开始 || ''));
+  if (!startText || !endText) {
+    return null;
+  }
+
+  const startMonth = Number(startText.split('-')[0]);
+  const endMonth = Number(endText.split('-')[0]);
+  const start = parseMonthDayWithYear(startText, inferAnchorYear(now, startMonth));
+  const end = parseMonthDayWithYear(endText, inferAnchorYear(now, endMonth));
+  if (!start || !end) {
+    return null;
+  }
+
+  return {
+    startText,
+    endText,
+    range: ensureRangeOrder({ start, end }),
+  };
+}
+
+async function buildRuntimeFestivalRecord(
+  festival: 日历运行时节庆条目,
+  now: DatePoint,
+): Promise<FestivalRecord | null> {
+  const dateRange = buildFestivalRange(festival, now);
+  if (!dateRange) {
+    return null;
+  }
+
+  const context = buildRuntimeContext(now);
+  const intro = await resolveCalendarContentNode(festival.介绍, context);
+  return {
+    id: festival.id,
+    title: festival.名称,
+    summary: intro.正文 || festival.名称,
+    content: intro.正文 || festival.名称,
+    entryName: festival.介绍?.条目?.条目名 || festival.介绍?.文本库?.条目名,
+    startText: dateRange.startText,
+    endText: dateRange.endText,
+    sourceKind: 'worldbook',
+    relatedBookIds: [...(festival.相关书籍 ?? [])],
+    stages: [],
+    range: dateRange.range,
+    metadata: {
+      source: 'runtime_worldbook',
+      monthDayRange: `${formatMonthDay(dateRange.range.start)}~${formatMonthDay(dateRange.range.end)}`,
+      introWarnings: intro.警告,
+      original: festival,
+    },
+  };
+}
+
+async function buildRuntimeBookRecord(book: 日历运行时书籍条目, now: DatePoint): Promise<CalendarBookRecord> {
+  const context = buildRuntimeContext(now);
+  const abstract = await resolveCalendarBookAbstract(book, context);
+  const fulltext = await resolveCalendarContentNode(book.全文, context);
+  return {
+    id: book.id,
+    title: book.名称,
+    summary: abstract.正文 || '',
+    content: fulltext.正文 || '',
+    worldbookEntryName: book.全文?.条目?.条目名 || book.全文?.文本库?.条目名,
+  };
+}
+
+export async function loadCalendarDatasetFromRuntimeWorldbook(): Promise<CalendarDataset> {
+  const activeBuckets = await readActiveBuckets();
+  const archive = readArchiveStore();
+  const worldTime = readCurrentWorldTime();
+  const now = worldTime.point ?? {
+    year: new Date().getFullYear(),
+    month: new Date().getMonth() + 1,
+    day: new Date().getDate(),
+  };
+
+  const runtimeIndex = await readCalendarRuntimeIndex();
+  const runtimeSources = resolveCalendarRuntimeWorldbookSources(archive.sources);
+  const runtimeFestivals = await Promise.all(
+    (runtimeIndex.索引?.节庆 ?? []).map(item => buildRuntimeFestivalRecord(item, now)),
+  );
+  const runtimeBooks = await Promise.all(
+    (runtimeIndex.索引?.书籍 ?? []).map(item => buildRuntimeBookRecord(item, now)),
+  );
+
+  const activeEvents = [
+    ...Object.entries(activeBuckets.临时).map(([id, raw]) => mapActiveEvent('临时', id, raw, now)),
+    ...Object.entries(activeBuckets.重复).map(([id, raw]) => mapActiveEvent('重复', id, raw, now)),
+  ];
+  const archivedEvents = Object.entries(archive.completed).map(([id, raw]) => mapArchivedEvent(id, raw, now));
+
+  return {
+    nowText: worldTime.text,
+    nowDate: worldTime.point ?? undefined,
+    calendarAnchor: worldTime.anchor ?? undefined,
+    activeEvents,
+    archivedEvents,
+    festivals: [...FIXED_FESTIVALS, ...runtimeFestivals.filter((value): value is FestivalRecord => Boolean(value))],
+    books: Object.fromEntries(runtimeBooks.map(book => [book.id, book])),
+    suggestions: buildSuggestionSet({ activeBuckets, archive }),
+    sourceConfig: archive.sources,
+    worldbookSources: runtimeSources,
+    sourceWarnings: runtimeIndex.警告,
+  };
+}

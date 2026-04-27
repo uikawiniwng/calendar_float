@@ -1,0 +1,36 @@
+import { readCalendarRuntimeIndex } from './runtime-worldbook-loader';
+import { CalendarMonthAliasRecord } from './types';
+
+function normalizeMonth(month: number): number {
+  return Number(month);
+}
+
+export async function getCalendarMonthAliasListFromRuntime(): Promise<CalendarMonthAliasRecord[]> {
+  const indexResult = await readCalendarRuntimeIndex();
+  return (indexResult.索引?.月份别名 ?? [])
+    .map(item => ({
+      month: Number(item.月份),
+      label: String(item.名称 || '').trim(),
+      season: String(item.季节 || '').trim() || undefined,
+    }))
+    .filter(item => Number.isFinite(item.month) && item.month >= 1 && item.month <= 12 && item.label);
+}
+
+export async function getCalendarMonthAliasLabelFromRuntime(month: number): Promise<string> {
+  const normalizedMonth = normalizeMonth(month);
+  if (!Number.isFinite(normalizedMonth)) {
+    return '';
+  }
+  const list = await getCalendarMonthAliasListFromRuntime();
+  return String(list.find(item => item.month === normalizedMonth)?.label || '').trim();
+}
+
+export function formatCalendarMonthTitle(year: number, month: number, alias?: string): string {
+  const normalizedYear = Number(year);
+  const normalizedMonth = normalizeMonth(month);
+  const aliasText = String(alias || '').trim();
+  if (aliasText) {
+    return `${normalizedYear}年 · ${aliasText}`;
+  }
+  return `${normalizedYear}年 · ${normalizedMonth}月`;
+}
