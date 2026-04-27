@@ -150,12 +150,26 @@ function buildRuntimeScanPromptContent(keywords: string[]): string {
   return 取唯一文本(keywords).join('\n');
 }
 
+function buildXmlWrappedPromptContent(tagName: string, content: string): string {
+  const normalizedContent = 规范化文本(content);
+  if (!normalizedContent) {
+    return '';
+  }
+  return `<${tagName}>\n${normalizedContent}\n</${tagName}>`;
+}
+
 function buildReminderPromptContent(result: 日历运行时扫描结果): string {
-  return [...取唯一文本(result.提醒未开始文本), ...取唯一文本(result.提醒进行中文本)].join('\n\n');
+  return buildXmlWrappedPromptContent(
+    'festival_reminder',
+    [...取唯一文本(result.提醒未开始文本), ...取唯一文本(result.提醒进行中文本)].join('\n\n'),
+  );
 }
 
 function buildAbstractPromptContent(result: 日历运行时扫描结果): string {
-  return result.摘要文本.map(item => `【${item.名称}】\n${item.正文}`).join('\n\n');
+  return buildXmlWrappedPromptContent(
+    'book_abstract',
+    result.摘要文本.map(item => `【${item.名称}】\n${item.正文}`).join('\n\n'),
+  );
 }
 
 function clearPromptById(id: string, uninjectRef: (() => void) | null): void {
