@@ -50,11 +50,16 @@ function common_path(lhs: string, rhs: string) {
 
 function glob_script_files() {
   const results: string[] = [];
+<<<<<<< HEAD
   const script_files = ['src/**/index.ts', 'src/**/index.tsx', 'src/**/index.js', 'src/**/index.jsx'].flatMap(pattern =>
     fs.globSync(pattern),
   );
 
   script_files
+=======
+
+  fs.globSync(`{示例,src}/**/index.{ts,tsx,js,jsx}`)
+>>>>>>> dc79e70c2b507a4984bc1620b1a875e1a4ff083d
     .filter(
       file => process.env.CI !== 'true' || !fs.readFileSync(path.join(import.meta.dirname, file)).includes('@no-ci'),
     )
@@ -77,6 +82,7 @@ function glob_script_files() {
   return results;
 }
 
+<<<<<<< HEAD
 function normalize_entry_path(file: string) {
   return file.replaceAll('\\', '/').replace(/\/+/g, '/').replace(/^\.\//, '');
 }
@@ -96,6 +102,13 @@ if (targetEntry && config.entries.length === 0) {
   console.warn(`\x1b[33m[webpack]\x1b[0m 未找到目标入口: ${targetEntry}`);
 }
 
+=======
+const config: Config = {
+  port: 6621,
+  entries: glob_script_files().map(parse_entry),
+};
+
+>>>>>>> dc79e70c2b507a4984bc1620b1a875e1a4ff083d
 let io: Server;
 function watch_tavern_helper(compiler: webpack.Compiler) {
   if (compiler.options.watch) {
@@ -124,13 +137,17 @@ function watch_tavern_helper(compiler: webpack.Compiler) {
 }
 
 let watcher: FSWatcher;
+<<<<<<< HEAD
 let hasQueuedSchemaDump = false;
+=======
+>>>>>>> dc79e70c2b507a4984bc1620b1a875e1a4ff083d
 const dump = () => {
   exec('pnpm dump', { cwd: import.meta.dirname });
   console.info('\x1b[36m[schema_dump]\x1b[0m 已将所有 schema.ts 转换为 schema.json');
 };
 const dump_debounced = _.debounce(dump, 500, { leading: true, trailing: false });
 function schema_dump(compiler: webpack.Compiler) {
+<<<<<<< HEAD
   if (skipSchemaDump) {
     return;
   }
@@ -139,6 +156,9 @@ function schema_dump(compiler: webpack.Compiler) {
       return;
     }
     hasQueuedSchemaDump = true;
+=======
+  if (!compiler.options.watch) {
+>>>>>>> dc79e70c2b507a4984bc1620b1a875e1a4ff083d
     dump_debounced();
     return;
   }
@@ -154,13 +174,17 @@ function schema_dump(compiler: webpack.Compiler) {
 }
 
 let child_process: ChildProcess;
+<<<<<<< HEAD
 let hasQueuedBundle = false;
+=======
+>>>>>>> dc79e70c2b507a4984bc1620b1a875e1a4ff083d
 const bundle = () => {
   exec('pnpm sync bundle all', { cwd: import.meta.dirname });
   console.info('\x1b[36m[tavern_sync]\x1b[0m 已打包所有配置了的角色卡/世界书/预设');
 };
 const bundle_debounced = _.debounce(bundle, 500, { leading: true, trailing: false });
 function tavern_sync(compiler: webpack.Compiler) {
+<<<<<<< HEAD
   if (skipTavernSync) {
     return;
   }
@@ -169,6 +193,9 @@ function tavern_sync(compiler: webpack.Compiler) {
       return;
     }
     hasQueuedBundle = true;
+=======
+  if (!compiler.options.watch) {
+>>>>>>> dc79e70c2b507a4984bc1620b1a875e1a4ff083d
     bundle_debounced();
     return;
   }
@@ -348,11 +375,14 @@ function parse_configuration(entry: Entry): (_env: any, argv: any) => webpack.Co
               exclude: /node_modules/,
             },
             {
+<<<<<<< HEAD
               test: /\.txt$/,
               type: 'asset/source',
               exclude: /node_modules/,
             },
             {
+=======
+>>>>>>> dc79e70c2b507a4984bc1620b1a875e1a4ff083d
               test: /\.html$/,
               use: 'html-loader',
               exclude: /node_modules/,
