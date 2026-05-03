@@ -4,12 +4,29 @@ export type EventSourceKind = 'active' | 'archive' | 'festival';
 export type FestivalSourceKind = 'fixed' | 'worldbook';
 export type AgendaItemKind = 'user' | 'festival';
 export type ReminderLevel = 'none' | 'soon' | 'today';
-export type CalendarSourceKind = 'chat_bound' | 'extra' | 'dev';
+export type CalendarSourceKind =
+  | 'character_primary'
+  | 'character_additional'
+  | 'global'
+  | 'chat_bound'
+  | 'extra'
+  | 'dev';
 
 export type CalendarNarrativeEventType = '日程' | '事件' | '回忆';
 export type CalendarPostAction = '不处理' | '自动清理' | '归档' | '转回忆';
 export type CalendarImportance = '普通' | '重要' | '纪念';
 export type CalendarVisibility = '玩家与LLM' | '仅玩家' | '仅系统';
+
+export interface CalendarEventColorStyle {
+  background: string;
+  text: string;
+  border?: string;
+}
+
+export interface CalendarFestivalRecurrence {
+  intervalYears: number;
+  lastYear: number;
+}
 
 export interface RawCalendarEvent {
   标题: string;
@@ -48,6 +65,10 @@ export interface CalendarSourceConfig {
 export interface CalendarArchivePolicy {
   archiveOnActiveRemoval: boolean;
   skipArchiveTags: string[];
+  autoDeleteTags: string[];
+  protectedTags: string[];
+  customTags: string[];
+  tagColors: Record<string, CalendarEventColorStyle>;
 }
 
 export interface ResolvedCalendarWorldbookSource {
@@ -83,7 +104,7 @@ export interface CalendarAnchor {
 export interface CalendarTagOption {
   value: string;
   label: string;
-  source: 'preset' | 'history' | 'festival';
+  source: 'preset' | 'history' | 'festival' | 'custom';
 }
 
 export interface CalendarSuggestionSet {
@@ -108,6 +129,7 @@ export interface CalendarEventRecord {
   range?: DateRange;
   relatedBookIds: string[];
   metadata: Record<string, unknown>;
+  color?: CalendarEventColorStyle;
 }
 
 export interface CalendarBookRecord {
@@ -144,6 +166,7 @@ export interface FestivalRecord {
   endText: string;
   sourceKind: FestivalSourceKind;
   range?: DateRange;
+  recurrence?: CalendarFestivalRecurrence;
   relatedBookIds: string[];
   stages: WorldbookStageRecord[];
   metadata: Record<string, unknown>;
@@ -159,6 +182,7 @@ export interface DayCellEventChip {
   isEnd: boolean;
   source: EventSourceKind;
   colorToken: 'user' | 'festival' | 'archived';
+  color?: CalendarEventColorStyle;
 }
 
 export interface MonthDayCell {
@@ -191,6 +215,7 @@ export interface DailyAgendaItem {
   relatedBookIds: string[];
   reminderLevel: ReminderLevel;
   metadata: Record<string, unknown>;
+  color?: CalendarEventColorStyle;
 }
 
 export interface DailyAgendaGroup {
@@ -214,6 +239,7 @@ export interface CalendarDataset {
   festivals: FestivalRecord[];
   books: Record<string, CalendarBookRecord>;
   suggestions: CalendarSuggestionSet;
+  monthAliases: CalendarMonthAliasRecord[];
   sourceConfig: CalendarSourceConfig;
   worldbookSources: ResolvedCalendarWorldbookSource[];
   sourceWarnings: string[];

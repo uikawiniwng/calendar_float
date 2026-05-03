@@ -1,0 +1,172 @@
+# host 注入说明
+
+## 1. 先加载 host.js
+
+要让模块注册到悬浮球，必须先让 `host.js` 运行成功。
+
+运行后，父窗口上会有这个全局对象：
+
+```js
+window.__mdpoemFloatingHost__
+```
+
+如果脚本跑在 iframe 环境里，通常实际取的是：
+
+```js
+parent.window.__mdpoemFloatingHost__
+```
+
+也就是模块里常见的写法：
+
+```js
+const HOST_GLOBAL_KEY = '__mdpoemFloatingHost__';
+const host = pwin[HOST_GLOBAL_KEY];
+```
+
+---
+
+## 2. 模块如何注入 host
+
+模块不需要直接改 `host.js`，只需要在自己的脚本里调用：
+
+```js
+host.registerModule({
+  key: 'your-module-key',
+  name: '你的模块名',
+  onClick: openModule,
+});
+```
+
+### 字段说明
+
+- `key`: 模块唯一标识，不能重复
+- `name`: 显示在 host 展开菜单里的名字
+- `onClick`: 点击该模块按钮时执行的函数
+
+---
+
+## 3. 推荐注入流程
+
+### 第一步：等待 host
+
+不要假设 host 一定已经挂好了，最好先轮询等待：
+
+```js
+async function waitForHost(getHost, retries = 40, interval = 50) {
+  for (let attempt = 0; attempt < retries; attempt += 1) {
+    const host = getHost();
+    if (host) return host;
+    await new Promise((resolve) => setTimeout(resolve, interval));
+  }
+  return getHost() || null;
+}
+```
+
+### 第二步：注册模块
+
+```js
+const host = await waitForHost(() => pwin.__mdpoemFloatingHost__);
+if (!host) return;
+
+const registerResult = host.registerModule({
+  key: 'worldbook',
+  name: '世界书',
+  onClick: togglePanel,
+});
+```
+
+### 第三步：保存实例
+
+建议把模块实例挂到全局，便于调试、重复注入前先清理旧实例、以及统一销毁：
+
+```js
+pwin.__yourModuleInstance__ = {
+  openModule,
+  closeModule,
+  destroy,
+};
+```
+
+如果模块脚本可能被重复执行，推荐像 `worldbook` 一样，注册前先尝试销毁旧实例：
+
+```js
+if (pwin[INSTANCE_KEY]?.destroy) {
+  pwin[INSTANCE_KEY].destroy({ unregister: true, silent: true });
+}
+```
+
+---
+
+## 4. 模块退出时要做什么
+
+模块自己要负责清理：
+
+- 自己创建的 DOM
+- 自己绑定的事件
+- 自己开的定时器
+- 必要时从 host 注销
+
+常见写法：
+
+```js
+const cleanupTasks = [];
+
+function addCleanup(task) {
+  cleanupTasks.push(task);
+}
+
+function addManagedListener(target, type, handler, options) {
+  target.addEventListener(type, handler, options);
+  addCleanup(() => target.removeEventListener(type, handler, options));
+}
+
+function destroy(options = {}) {
+  if (destroyed) return;
+  destroyed = true;
+
+  const { unregister = false } = options;
+
+  while (cleanupTasks.length) {
+    const task = cleanupTasks.pop();
+    task?.();
+  }
+
+  // 清理自己的 DOM / 定时器 / 其他资源
+
+  if (unregister) {
+    host.unregisterModule(MODULE_KEY);
+  }
+
+  if (pwin[INSTANCE_KEY]?.destroy === destroy) {
+    delete pwin[INSTANCE_KEY];
+  }
+}
+```
+
+并在页面退出时调用：
+
+```js
+const handlePageExit = () => destroy({ unregister: true, silent: true });
+
+addManagedListener(window, 'pagehide', handlePageExit);
+addManagedListener(window, 'unload', handlePageExit);
+```
+
+这里推荐监听**当前脚本环境的 `window`**，并把监听也纳入 `destroy` 的清理链里；这更接近 `worldbook` 当前的处理方式。
+
+---
+
+## 5. 最小原则
+
+- `host.js` 负责悬浮球和模块菜单
+- 业务模块负责自己的界面和行为
+- 模块通过 `registerModule(...)` 接入 host
+- 不要为了接一个模块就去改 host 内部逻辑，除非宿主能力本身不够
+
+---
+
+## 6. 参考文件
+
+- 宿主：`host.js`
+- 模块模板：`host_module_template.js`
+- 复杂模块参考：`worldbook_vue.js`

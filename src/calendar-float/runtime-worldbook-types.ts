@@ -33,6 +33,8 @@ export interface 日历运行时日期窗口条件 {
   提前天数?: number;
   延后天数?: number;
   仅进行中?: boolean;
+  每隔年?: number;
+  上次年份?: number;
 }
 
 export interface 日历运行时原子条件 {
@@ -88,11 +90,17 @@ export interface 日历运行时内容节点 {
   元数据?: Record<string, unknown>;
 }
 
+export interface 日历运行时节庆周期 {
+  每隔年: number;
+  上次年份: number;
+}
+
 export interface 日历运行时节庆条目 {
   id: string;
   名称: string;
   开始: string;
   结束: string;
+  周期?: 日历运行时节庆周期;
   启用?: boolean;
   介绍?: 日历运行时内容节点 | null;
   文本?: 日历运行时内容节点[];
@@ -111,10 +119,11 @@ export interface 日历运行时书籍条目 {
 }
 
 export interface 日历运行时提醒默认值 {
-  注入方式?: 'injectprompt';
+  注入方式?: 日历运行时输出模式;
   注入深度?: number;
   禁用递归?: boolean;
   禁用触发词?: boolean;
+  宏触发词模板?: string;
   缺省模板?: Partial<Record<日历运行时提醒状态, string>>;
 }
 
@@ -160,6 +169,7 @@ export interface 日历世界书来源条目 {
 export interface 日历世界书索引读取结果 {
   索引: 日历运行时索引 | null;
   来源世界书: string[];
+  命中世界书名: string | null;
   命中条目名: string | null;
   警告: string[];
 }

@@ -29,8 +29,6 @@ export function formatCalendarMonthTitle(year: number, month: number, alias?: st
   const normalizedYear = Number(year);
   const normalizedMonth = normalizeMonth(month);
   const aliasText = String(alias || '').trim();
-  if (aliasText) {
-    return `${normalizedYear}年 · ${aliasText}`;
-  }
-  return `${normalizedYear}年 · ${normalizedMonth}月`;
+  const monthText = Number.isFinite(normalizedMonth) ? `${normalizedMonth}月` : '月份未知';
+  return aliasText ? `${normalizedYear}年·${monthText}(${aliasText})` : `${normalizedYear}年·${monthText}`;
 }

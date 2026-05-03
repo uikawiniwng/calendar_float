@@ -6,6 +6,7 @@
 import {
   addDays,
   compareDatePoint,
+  extractClockTimeText,
   formatDateKey,
   formatDateLabel,
   getMonthGridEndWithAnchor,
@@ -62,11 +63,28 @@ function rangesOverlap(left: DateRange, right: DateRange): boolean {
   return compareDatePoint(left.start, right.end) <= 0 && compareDatePoint(left.end, right.start) >= 0;
 }
 
+function isFestivalOccurrenceYear(festival: FestivalRecord, year: number): boolean {
+  const recurrence = festival.recurrence;
+  if (!recurrence) {
+    return true;
+  }
+  const intervalYears = Math.floor(Number(recurrence.intervalYears));
+  const lastYear = Math.floor(Number(recurrence.lastYear));
+  if (!Number.isFinite(intervalYears) || intervalYears <= 1 || !Number.isFinite(lastYear)) {
+    return true;
+  }
+  return (year - lastYear) % intervalYears === 0;
+}
+
 function resolveFestivalOccurrenceRange(festival: FestivalRecord, startYear: number): DateRange | null {
   const startText = normalizeMonthDayText(festival.startText);
   const endText = normalizeMonthDayText(festival.endText || festival.startText);
   if (!startText || !endText) {
     return festival.range ?? null;
+  }
+
+  if (!isFestivalOccurrenceYear(festival, startYear)) {
+    return null;
   }
 
   const start = parseMonthDayWithYear(startText, startYear);
@@ -165,6 +183,7 @@ export function buildMonthCells(args: {
         isEnd: !!event.range && isSameDatePoint(cursor, event.range.end),
         source: event.source,
         colorToken: event.source === 'festival' ? 'festival' : event.source === 'archive' ? 'archived' : 'user',
+        color: event.color,
       })),
       overflowCount: Math.max(0, dayEvents.length - 3),
     });
@@ -172,6 +191,25 @@ export function buildMonthCells(args: {
   }
 
   return cells;
+}
+
+function getAgendaItemSortClock(item: Pick<DailyAgendaItem, 'startText' | 'endText'>): string {
+  return extractClockTimeText(item.startText) || extractClockTimeText(item.endText);
+}
+
+function compareDailyAgendaItems(left: DailyAgendaItem, right: DailyAgendaItem): number {
+  const leftClock = getAgendaItemSortClock(left);
+  const rightClock = getAgendaItemSortClock(right);
+  if (leftClock || rightClock) {
+    if (!leftClock) {
+      return 1;
+    }
+    if (!rightClock) {
+      return -1;
+    }
+    return leftClock.localeCompare(rightClock) || left.title.localeCompare(right.title, 'zh-CN');
+  }
+  return left.title.localeCompare(right.title, 'zh-CN');
 }
 
 export function buildDailyAgenda(dataset: CalendarDataset, startDateKey?: string, dayCount = 7): DailyAgendaGroup[] {
@@ -213,9 +251,10 @@ export function buildDailyAgenda(dataset: CalendarDataset, startDateKey?: string
           relatedBookIds: event.relatedBookIds,
           reminderLevel: resolveEventReminderLevel(point, event),
           metadata: event.metadata,
+          color: event.color,
         };
       })
-      .sort((left, right) => left.title.localeCompare(right.title, 'zh-CN'));
+      .sort(compareDailyAgendaItems);
 
     return {
       dateKey,

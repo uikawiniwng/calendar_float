@@ -8,20 +8,27 @@ import {
   buildCalendarUpdateRulesEntryContent,
   buildCalendarVariableListEntryContent,
 } from './managed-worldbook-content';
+import {
+  inspectCalendarRuntimeWorldbookSummary,
+  listCalendarRuntimeWorldbookMoveCandidates,
+  type CalendarRuntimeWorldbookMoveCandidate,
+} from './runtime-worldbook-loader';
 
 const MANAGED_WORLDBOOK_MARKER = 'calendar_float_character_worldbook';
 const MANAGED_ENTRY_PREFIX = '[DLC][扩展][月历球]';
-const META_ENTRY_NAME = `${MANAGED_ENTRY_PREFIX}[meta]manifest`;
+const LEGACY_META_ENTRY_NAME = `${MANAGED_ENTRY_PREFIX}[meta]manifest`;
 const UPDATE_RULES_ENTRY_NAME = `[mvu_update]${MANAGED_ENTRY_PREFIX}[月历变量更新规则]`;
-const VARIABLE_LIST_ENTRY_NAME = `${MANAGED_ENTRY_PREFIX}[变量列表]`;
+const VARIABLE_LIST_ENTRY_NAME = `${MANAGED_ENTRY_PREFIX}[当前日历内容展示]`;
 const MANAGED_WORLDBOOK_STORAGE_KEY = `${SCRIPT_NAME}:managed-worldbook-enabled`;
-const CALENDAR_MANAGED_WORLDBOOK_VERSION = 'v4.0.0';
+const MANAGED_WORLDBOOK_TARGET_STORAGE_KEY = `${SCRIPT_NAME}:managed-worldbook-target`;
+const CALENDAR_MANAGED_WORLDBOOK_VERSION = 'v4.1.0';
 const DEFAULT_WORLDINFO_ORDER_BASE = 8800000;
 
 export const CALENDAR_MANAGED_ENTRY_PREFIX = MANAGED_ENTRY_PREFIX;
 
-const EXPECTED_MANAGED_ENTRY_NAMES = new Set([META_ENTRY_NAME, UPDATE_RULES_ENTRY_NAME, VARIABLE_LIST_ENTRY_NAME]);
+const EXPECTED_MANAGED_ENTRY_NAMES = new Set([UPDATE_RULES_ENTRY_NAME, VARIABLE_LIST_ENTRY_NAME]);
 const EXPECTED_MANAGED_ENTRY_COUNT = EXPECTED_MANAGED_ENTRY_NAMES.size;
+const AVAILABLE_WORLDBOOK_TARGET_MODE: EnsureCalendarManagedWorldbookEntriesResult['targetMode'] = 'stored_external';
 
 export type CalendarManagedWorldbookConnectivityState =
   | 'unknown'
@@ -35,6 +42,47 @@ export interface EnsureCalendarManagedWorldbookEntriesResult {
   name: string;
   created: boolean;
   updated: boolean;
+  movedCount?: number;
+  removedSourceCount?: number;
+  targetMode?: 'character_primary' | 'stored_external';
+}
+
+export type CalendarWorldbookMoveCandidateKind =
+  | 'backend_meta'
+  | 'backend_update_rules'
+  | 'backend_variable_display'
+  | 'runtime_index'
+  | 'runtime_content';
+
+export type CalendarWorldbookSourceGroup = 'event' | 'book' | 'utility';
+
+export interface CalendarWorldbookMoveCandidate {
+  id: string;
+  label: string;
+  kind: CalendarWorldbookMoveCandidateKind;
+  sourceGroup: CalendarWorldbookSourceGroup;
+  sourceWorldbookName: string;
+  entryName: string;
+  entry: Partial<WorldbookEntry>;
+  selectedByDefault: boolean;
+}
+
+export interface CalendarWorldbookMoveCandidatesResult {
+  candidates: CalendarWorldbookMoveCandidate[];
+  warnings: string[];
+}
+
+export interface InstallCalendarManagedEntriesToExternalWorldbookOptions {
+  candidateIds?: string[];
+  removeFromSource?: boolean;
+}
+
+export interface CalendarManagedWorldbookSourceItem {
+  group: CalendarWorldbookSourceGroup;
+  label: string;
+  sourceWorldbookName: string;
+  entryName: string;
+  found: boolean;
 }
 
 export interface CalendarManagedWorldbookDiagnostics {
@@ -51,6 +99,8 @@ export interface CalendarManagedWorldbookDiagnostics {
   hasMetaEntry: boolean;
   hasUpdateRulesEntry: boolean;
   hasVariableListEntry: boolean;
+  runtimeIndexWorldbookName: string;
+  runtimeContentWorldbookNames: string[];
   managedEntryCount: number;
   expectedManagedEntryCount: number;
   allManagedEntriesPresent: boolean;
@@ -58,6 +108,7 @@ export interface CalendarManagedWorldbookDiagnostics {
   lastError: string;
   lastEnsureAt: string;
   lastImportAt: string;
+  sourceItems: CalendarManagedWorldbookSourceItem[];
 }
 
 type ManagedWorldbookEntrySeed = Partial<WorldbookEntry>;
@@ -77,6 +128,8 @@ const diagnostics: CalendarManagedWorldbookDiagnostics = {
   hasMetaEntry: false,
   hasUpdateRulesEntry: false,
   hasVariableListEntry: false,
+  runtimeIndexWorldbookName: '',
+  runtimeContentWorldbookNames: [],
   managedEntryCount: 0,
   expectedManagedEntryCount: EXPECTED_MANAGED_ENTRY_COUNT,
   allManagedEntriesPresent: false,
@@ -84,6 +137,7 @@ const diagnostics: CalendarManagedWorldbookDiagnostics = {
   lastError: '',
   lastEnsureAt: '',
   lastImportAt: '',
+  sourceItems: [],
 };
 
 function nowIso(): string {
@@ -119,7 +173,16 @@ function normalizeEntryName(name: unknown): string {
 }
 
 function normalizeWorldbookNameList(names: string[]): string[] {
-  return names.map(name => String(name || '').trim()).filter(Boolean);
+  return names
+    .map(name => String(name || '').trim())
+    .filter(Boolean)
+    .filter((name, index, list) => list.indexOf(name) === index);
+}
+
+function readAvailableWorldbookNames(): string[] {
+  return normalizeWorldbookNameList([...getWorldbookNames(), ...getGlobalWorldbookNames()]).sort((left, right) =>
+    left.localeCompare(right, 'zh-CN'),
+  );
 }
 
 function readCurrentCharacterWorldbookBinding(): CharWorldbooks {
@@ -138,15 +201,18 @@ function readCurrentCharacterPrimaryWorldbookName(): string {
 }
 
 function isManagedWorldbookEntry(entry: Pick<WorldbookEntry, 'name' | 'extra'>): boolean {
+  const entryName = normalizeEntryName(entry.name);
   return (
     String(entry.extra?.managedBy ?? '') === MANAGED_WORLDBOOK_MARKER ||
-    normalizeEntryName(entry.name).startsWith(MANAGED_ENTRY_PREFIX) ||
-    normalizeEntryName(entry.name).startsWith(`[mvu_update]${MANAGED_ENTRY_PREFIX}`)
+    entryName === LEGACY_META_ENTRY_NAME ||
+    entryName.startsWith(MANAGED_ENTRY_PREFIX) ||
+    entryName.startsWith(`[mvu_update]${MANAGED_ENTRY_PREFIX}`)
   );
 }
 
 function readManagedEntry(entries: WorldbookEntry[], entryName: string): WorldbookEntry | undefined {
-  return entries.find(entry => entry.name === entryName && isManagedWorldbookEntry(entry));
+  const normalizedEntryName = normalizeEntryName(entryName);
+  return entries.find(entry => normalizeEntryName(entry.name) === normalizedEntryName);
 }
 
 function resolvePosition(slot: PositionSlot, order: number): WorldbookEntry['position'] {
@@ -210,16 +276,12 @@ function buildManagedEntryBase(args: {
   };
 }
 
+function buildBackendMoveCandidateId(entryKind: string): string {
+  return `backend::${entryKind}`;
+}
+
 function buildManagedWorldbookEntries(): ManagedWorldbookEntrySeed[] {
   return [
-    buildManagedEntryBase({
-      name: META_ENTRY_NAME,
-      content: '本条目由脚本自动维护，用于标记月历球 runtime worldbook 基础设施已安装到角色主 worldbook。',
-      order: DEFAULT_WORLDINFO_ORDER_BASE,
-      slot: 'after_character_definition',
-      enabled: false,
-      entryKind: 'meta_manifest',
-    }),
     buildManagedEntryBase({
       name: UPDATE_RULES_ENTRY_NAME,
       content: buildCalendarUpdateRulesEntryContent(),
@@ -235,6 +297,90 @@ function buildManagedWorldbookEntries(): ManagedWorldbookEntrySeed[] {
       entryKind: 'variable_list',
     }),
   ];
+}
+
+function buildManagedBackendMoveCandidates(): CalendarWorldbookMoveCandidate[] {
+  const targetName = readManagedWorldbookTargetName().worldbookName || '脚本内置';
+  return buildManagedWorldbookEntries().map(entry => {
+    const entryKind = String(entry.extra?.entryKind || 'backend');
+    const label = entryKind === 'mvu_update_rule' ? '基础规则：月历变量更新规则' : '变量展示：当前日历内容展示';
+    const kind: CalendarWorldbookMoveCandidateKind =
+      entryKind === 'mvu_update_rule' ? 'backend_update_rules' : 'backend_variable_display';
+    return {
+      id: buildBackendMoveCandidateId(entryKind),
+      label,
+      kind,
+      sourceGroup: 'utility',
+      sourceWorldbookName: targetName,
+      entryName: normalizeEntryName(entry.name),
+      entry,
+      selectedByDefault: true,
+    };
+  });
+}
+
+function mapRuntimeMoveCandidate(candidate: CalendarRuntimeWorldbookMoveCandidate): CalendarWorldbookMoveCandidate {
+  return {
+    id: candidate.id,
+    label: candidate.label,
+    kind: candidate.kind,
+    sourceGroup: candidate.label.includes('读物') ? 'book' : 'event',
+    sourceWorldbookName: candidate.sourceWorldbookName,
+    entryName: candidate.entryName,
+    entry: candidate.entry,
+    selectedByDefault: candidate.selectedByDefault,
+  };
+}
+
+function cloneMoveCandidateEntry(candidate: CalendarWorldbookMoveCandidate): ManagedWorldbookEntrySeed {
+  const { uid: _uid, ...entry } = candidate.entry as WorldbookEntry;
+  return {
+    ...entry,
+    name: candidate.entryName || entry.name,
+    extra: {
+      ...(entry.extra ?? {}),
+      calendarFloatMovedFrom: candidate.sourceGroup === 'utility' ? undefined : candidate.sourceWorldbookName,
+    },
+  };
+}
+
+function mergeTransferredEntry(
+  existing: WorldbookEntry | undefined,
+  seed: ManagedWorldbookEntrySeed,
+): ManagedWorldbookEntrySeed {
+  if (!existing) {
+    return seed;
+  }
+  return mergeManagedEntry(existing, seed);
+}
+
+export async function listCalendarWorldbookMoveCandidates(): Promise<CalendarWorldbookMoveCandidatesResult> {
+  const backendCandidates = buildManagedBackendMoveCandidates();
+  const runtimeResult = await listCalendarRuntimeWorldbookMoveCandidates();
+  return {
+    candidates: [...backendCandidates, ...runtimeResult.candidates.map(mapRuntimeMoveCandidate)],
+    warnings: runtimeResult.warnings,
+  };
+}
+
+export async function refreshCalendarManagedWorldbookSourceDiagnostics(): Promise<void> {
+  try {
+    const result = await listCalendarWorldbookMoveCandidates();
+    diagnostics.sourceItems = result.candidates.map(candidate => ({
+      group: candidate.sourceGroup,
+      label: candidate.label,
+      sourceWorldbookName: candidate.sourceWorldbookName,
+      entryName: candidate.entryName,
+      found: true,
+    }));
+  } catch (error) {
+    diagnostics.sourceItems = [];
+    setDiagnosticsError(error);
+  }
+}
+
+export function getCalendarManagedWorldbookTargetName(): string {
+  return readManagedWorldbookTargetName().worldbookName;
 }
 
 function mergeManagedEntry(
@@ -278,13 +424,21 @@ function mergeManagedEntry(
 function syncEntryDiagnostics(entries: WorldbookEntry[], worldbookName: string): void {
   diagnostics.worldbookName = worldbookName;
   diagnostics.entryCount = entries.length;
-  diagnostics.hasMetaEntry = Boolean(readManagedEntry(entries, META_ENTRY_NAME));
+  diagnostics.hasMetaEntry = false;
   diagnostics.hasUpdateRulesEntry = Boolean(readManagedEntry(entries, UPDATE_RULES_ENTRY_NAME));
   diagnostics.hasVariableListEntry = Boolean(readManagedEntry(entries, VARIABLE_LIST_ENTRY_NAME));
-  diagnostics.managedEntryCount = entries.filter(entry => isManagedWorldbookEntry(entry)).length;
+  diagnostics.managedEntryCount = Array.from(EXPECTED_MANAGED_ENTRY_NAMES).filter(entryName =>
+    Boolean(readManagedEntry(entries, entryName)),
+  ).length;
   diagnostics.allManagedEntriesPresent = Array.from(EXPECTED_MANAGED_ENTRY_NAMES).every(entryName =>
     Boolean(readManagedEntry(entries, entryName)),
   );
+}
+
+export async function refreshCalendarManagedWorldbookRuntimeDiagnostics(): Promise<void> {
+  const summary = await inspectCalendarRuntimeWorldbookSummary();
+  diagnostics.runtimeIndexWorldbookName = summary.索引世界书 ?? '';
+  diagnostics.runtimeContentWorldbookNames = summary.正文世界书;
 }
 
 function isManagementEnabled(): boolean {
@@ -305,13 +459,50 @@ function setManagementEnabled(enabled: boolean): void {
   }
 }
 
-async function readCharacterPrimaryWorldbookEntries(): Promise<{ worldbookName: string; entries: WorldbookEntry[] }> {
-  const worldbookName = readCurrentCharacterPrimaryWorldbookName();
-  if (!worldbookName) {
-    throw new Error('当前角色没有主 worldbook，无法写入脚本条目');
+function readStoredManagedWorldbookTargetName(): string {
+  try {
+    return normalizeEntryName(window.localStorage?.getItem(MANAGED_WORLDBOOK_TARGET_STORAGE_KEY));
+  } catch (error) {
+    console.warn(`[${SCRIPT_NAME}] 读取 worldbook 后端目标失败`, error);
+    return '';
   }
-  const entries = await getWorldbook(worldbookName);
-  return { worldbookName, entries };
+}
+
+function writeStoredManagedWorldbookTargetName(worldbookName: string): void {
+  const normalized = normalizeEntryName(worldbookName);
+  try {
+    if (normalized) {
+      window.localStorage?.setItem(MANAGED_WORLDBOOK_TARGET_STORAGE_KEY, normalized);
+    } else {
+      window.localStorage?.removeItem(MANAGED_WORLDBOOK_TARGET_STORAGE_KEY);
+    }
+  } catch (error) {
+    console.warn(`[${SCRIPT_NAME}] 写入 worldbook 后端目标失败`, error);
+  }
+}
+
+function readManagedWorldbookTargetName(): {
+  worldbookName: string;
+  targetMode: 'character_primary' | 'stored_external';
+} {
+  const storedTarget = readStoredManagedWorldbookTargetName();
+  if (storedTarget) {
+    return { worldbookName: storedTarget, targetMode: 'stored_external' };
+  }
+  return { worldbookName: readCurrentCharacterPrimaryWorldbookName(), targetMode: 'character_primary' };
+}
+
+async function readManagedTargetWorldbookEntries(): Promise<{
+  worldbookName: string;
+  entries: WorldbookEntry[];
+  targetMode: 'character_primary' | 'stored_external';
+}> {
+  const target = readManagedWorldbookTargetName();
+  if (!target.worldbookName) {
+    throw new Error('当前没有可用 worldbook 后端目标：请先绑定角色主 worldbook，或在搬运面板选择外部 worldbook');
+  }
+  const entries = await getWorldbook(target.worldbookName);
+  return { ...target, entries };
 }
 
 async function readWorldbookEntriesByName(
@@ -381,22 +572,28 @@ async function upsertManagedEntriesToTargetWorldbook(args: {
   const { worldbookName, entries, syncDiagnostics } = args;
   const desiredEntries = buildManagedWorldbookEntries();
   const desiredEntryNames = new Set(desiredEntries.map(entry => normalizeEntryName(entry.name)));
-  const existingManagedMap = new Map(
-    entries.filter(entry => isManagedWorldbookEntry(entry)).map(entry => [normalizeEntryName(entry.name), entry]),
+  const existingExpectedMap = new Map(
+    entries
+      .filter(entry => desiredEntryNames.has(normalizeEntryName(entry.name)))
+      .map(entry => [normalizeEntryName(entry.name), entry]),
   );
-  const missingEntries = desiredEntries.filter(entry => !existingManagedMap.has(normalizeEntryName(entry.name)));
+  const existingExpectedCount = entries.filter(entry => desiredEntryNames.has(normalizeEntryName(entry.name))).length;
+  const missingEntries = desiredEntries.filter(entry => !existingExpectedMap.has(normalizeEntryName(entry.name)));
+  const hasDuplicateManagedEntries = existingExpectedCount > existingExpectedMap.size;
 
   await updateWorldbookWith(worldbookName, currentEntries => {
-    const currentManagedMap = new Map(
+    const currentExpectedMap = new Map(
       currentEntries
-        .filter(entry => isManagedWorldbookEntry(entry))
+        .filter(entry => desiredEntryNames.has(normalizeEntryName(entry.name)))
         .map(entry => [normalizeEntryName(entry.name), entry]),
     );
-    const unmanagedEntries = currentEntries.filter(entry => !isManagedWorldbookEntry(entry));
+    const unmanagedEntries = currentEntries.filter(
+      entry => !isManagedWorldbookEntry(entry) && !desiredEntryNames.has(normalizeEntryName(entry.name)),
+    );
     const nextManagedEntries = desiredEntries
       .map(entry => {
         const entryName = normalizeEntryName(entry.name);
-        const existingManagedEntry = currentManagedMap.get(entryName);
+        const existingManagedEntry = currentExpectedMap.get(entryName);
         return mergeManagedEntry(existingManagedEntry, entry);
       })
       .filter((entry): entry is ManagedWorldbookEntrySeed => Boolean(entry));
@@ -404,21 +601,18 @@ async function upsertManagedEntriesToTargetWorldbook(args: {
     return [...unmanagedEntries, ...nextManagedEntries];
   });
 
-  if (missingEntries.length > 0) {
-    await createWorldbookEntries(worldbookName, missingEntries);
-  }
-
   const refreshedEntries = await getWorldbook(worldbookName);
   assertManagedEntriesWritten(refreshedEntries, desiredEntries);
   const updated =
     missingEntries.length > 0 ||
+    hasDuplicateManagedEntries ||
     refreshedEntries.filter(
       entry => isManagedWorldbookEntry(entry) && desiredEntryNames.has(normalizeEntryName(entry.name)),
     ).length === desiredEntries.length;
 
   if (syncDiagnostics) {
     syncEntryDiagnostics(refreshedEntries, worldbookName);
-    diagnostics.existsInRegistry = normalizeWorldbookNameList(getWorldbookNames()).includes(worldbookName);
+    diagnostics.existsInRegistry = readAvailableWorldbookNames().includes(worldbookName);
     diagnostics.foundByScript = true;
     diagnostics.createdDuringEnsure = missingEntries.length > 0;
     diagnostics.updatedDuringEnsure = updated;
@@ -434,35 +628,74 @@ async function upsertManagedEntriesToTargetWorldbook(args: {
   };
 }
 
+async function findAvailableWorldbookWithExpectedEntries(): Promise<{
+  worldbookName: string;
+  entries: WorldbookEntry[];
+} | null> {
+  const target = readManagedWorldbookTargetName();
+  const availableNames = readAvailableWorldbookNames();
+  const names = normalizeWorldbookNameList([
+    target.worldbookName,
+    readCurrentCharacterPrimaryWorldbookName(),
+    ...availableNames,
+  ]);
+
+  for (const worldbookName of names) {
+    try {
+      const entries = await getWorldbook(worldbookName);
+      const hasAllExpectedEntries = Array.from(EXPECTED_MANAGED_ENTRY_NAMES).every(entryName =>
+        Boolean(readManagedEntry(entries, entryName)),
+      );
+      if (hasAllExpectedEntries) {
+        return { worldbookName, entries };
+      }
+    } catch (error) {
+      emitManagedWorldbookWarnLog('检查可用 worldbook 后端条目失败，已跳过该 worldbook', {
+        worldbookName,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  return null;
+}
+
 async function upsertManagedEntries(): Promise<EnsureCalendarManagedWorldbookEntriesResult> {
   diagnostics.managementEnabled = isManagementEnabled();
-  if (!diagnostics.managementEnabled) {
-    diagnostics.connectivity = 'missing';
-    diagnostics.lastEnsureSucceeded = true;
-    diagnostics.updatedDuringEnsure = false;
+  const existing = await findAvailableWorldbookWithExpectedEntries();
+  if (existing) {
+    writeStoredManagedWorldbookTargetName(existing.worldbookName);
+    syncEntryDiagnostics(existing.entries, existing.worldbookName);
+    diagnostics.existsInRegistry = readAvailableWorldbookNames().includes(existing.worldbookName);
+    diagnostics.foundByScript = true;
     diagnostics.createdDuringEnsure = false;
-    diagnostics.worldbookName = readCurrentCharacterPrimaryWorldbookName();
+    diagnostics.updatedDuringEnsure = false;
+    diagnostics.lastEnsureSucceeded = true;
+    diagnostics.connectivity = 'ready';
+    resetDiagnosticsError();
     return {
-      name: diagnostics.worldbookName,
+      name: existing.worldbookName,
       created: false,
       updated: false,
+      targetMode: AVAILABLE_WORLDBOOK_TARGET_MODE,
     };
   }
 
-  const { worldbookName, entries } = await readCharacterPrimaryWorldbookEntries();
-  return upsertManagedEntriesToTargetWorldbook({
+  setManagementEnabled(true);
+  const { worldbookName, entries, targetMode } = await readManagedTargetWorldbookEntries();
+  const result = await upsertManagedEntriesToTargetWorldbook({
     worldbookName,
     entries,
     syncDiagnostics: true,
   });
+  return { ...result, targetMode };
 }
 
 async function refreshDiagnosticsFromCharacterWorldbook(): Promise<void> {
   diagnostics.managementEnabled = isManagementEnabled();
-  diagnostics.worldbookName = readCurrentCharacterPrimaryWorldbookName();
+  diagnostics.worldbookName = readManagedWorldbookTargetName().worldbookName;
   diagnostics.existsInRegistry =
-    Boolean(diagnostics.worldbookName) &&
-    normalizeWorldbookNameList(getWorldbookNames()).includes(diagnostics.worldbookName);
+    Boolean(diagnostics.worldbookName) && readAvailableWorldbookNames().includes(diagnostics.worldbookName);
 
   if (!diagnostics.worldbookName || !diagnostics.existsInRegistry) {
     diagnostics.foundByScript = false;
@@ -524,25 +757,29 @@ export async function uninstallCalendarManagedWorldbookEntries(): Promise<{
   worldbookName: string;
   removedCount: number;
 }> {
-  const worldbookName = readCurrentCharacterPrimaryWorldbookName();
+  const worldbookName = readManagedWorldbookTargetName().worldbookName;
   if (!worldbookName) {
-    throw new Error('当前角色没有主 worldbook，无法卸载脚本条目');
+    throw new Error('当前没有可用 worldbook 后端目标，无法卸载脚本条目');
   }
 
   const beforeEntries = await getWorldbook(worldbookName);
   const removedCount = beforeEntries.filter(entry => isManagedWorldbookEntry(entry)).length;
   await deleteWorldbookEntries(worldbookName, entry => isManagedWorldbookEntry(entry));
-  setManagementEnabled(false);
+  setManagementEnabled(true);
   await refreshDiagnosticsFromCharacterWorldbook();
   diagnostics.lastEnsureSucceeded = true;
   diagnostics.updatedDuringEnsure = removedCount > 0;
   diagnostics.createdDuringEnsure = false;
   diagnostics.connectivity = 'missing';
   resetDiagnosticsError();
-  emitManagedWorldbookDebugLog('已从角色主 worldbook 卸载脚本 runtime 基础设施条目', {
+  emitManagedWorldbookDebugLog('已从当前后端目标 worldbook 卸载脚本 runtime 基础设施条目', {
     worldbookName,
     removedCount,
   });
+
+  if (readStoredManagedWorldbookTargetName() === worldbookName) {
+    writeStoredManagedWorldbookTargetName('');
+  }
 
   return {
     worldbookName,
@@ -556,15 +793,27 @@ export async function installCalendarManagedWorldbookEntries(): Promise<EnsureCa
   diagnostics.connectivity = 'checking';
   setManagementEnabled(true);
   emitManagedWorldbookDebugLog('收到手动导入角色主 worldbook runtime 基础设施条目请求', {
-    worldbookName: readCurrentCharacterPrimaryWorldbookName(),
+    worldbookName: readManagedWorldbookTargetName().worldbookName,
   });
 
   try {
-    const result = await syncCalendarManagedCharacterEntries();
+    diagnostics.lastEnsureAt = nowIso();
+    diagnostics.createdDuringEnsure = false;
+    diagnostics.updatedDuringEnsure = false;
+    diagnostics.lastEnsureSucceeded = false;
+    resetDiagnosticsError();
+    const { worldbookName, entries, targetMode } = await readManagedTargetWorldbookEntries();
+    const upsertResult = await upsertManagedEntriesToTargetWorldbook({
+      worldbookName,
+      entries,
+      syncDiagnostics: true,
+    });
+    const result = { ...upsertResult, targetMode };
     diagnostics.connectivity = 'recreated';
     diagnostics.createdDuringEnsure = result.created;
     diagnostics.updatedDuringEnsure = result.updated;
     diagnostics.lastEnsureSucceeded = true;
+    await refreshCalendarManagedWorldbookSourceDiagnostics();
     return result;
   } catch (error) {
     diagnostics.connectivity = 'error';
@@ -580,6 +829,7 @@ export async function installCalendarManagedWorldbookEntries(): Promise<EnsureCa
 
 export async function installCalendarManagedEntriesToExternalWorldbook(
   worldbookName: string,
+  options: InstallCalendarManagedEntriesToExternalWorldbookOptions = {},
 ): Promise<EnsureCalendarManagedWorldbookEntriesResult> {
   const {
     worldbookName: targetWorldbookName,
@@ -588,20 +838,89 @@ export async function installCalendarManagedEntriesToExternalWorldbook(
   } = await readWorldbookEntriesByName(worldbookName, {
     createIfMissing: true,
   });
-  const result = await upsertManagedEntriesToTargetWorldbook({
-    worldbookName: targetWorldbookName,
-    entries,
-    syncDiagnostics: false,
-  });
-  emitManagedWorldbookDebugLog(
-    existed ? '已更新外部 worldbook runtime 基础设施条目' : '已创建外部 worldbook 并写入 runtime 基础设施条目',
-    {
+
+  if (!options.candidateIds) {
+    const result = await upsertManagedEntriesToTargetWorldbook({
       worldbookName: targetWorldbookName,
-      created: result.created,
-      updated: result.updated,
-    },
+      entries,
+      syncDiagnostics: false,
+    });
+    emitManagedWorldbookDebugLog(
+      existed ? '已更新外部 worldbook runtime 基础设施条目' : '已创建外部 worldbook 并写入 runtime 基础设施条目',
+      {
+        worldbookName: targetWorldbookName,
+        created: result.created,
+        updated: result.updated,
+      },
+    );
+    return result;
+  }
+
+  writeStoredManagedWorldbookTargetName(targetWorldbookName);
+  const selectedIds = new Set(options.candidateIds.map(id => normalizeEntryName(id)).filter(Boolean));
+  const candidatesResult = await listCalendarWorldbookMoveCandidates();
+  const selectedCandidates = candidatesResult.candidates.filter(candidate => selectedIds.has(candidate.id));
+  if (selectedCandidates.length === 0) {
+    throw new Error('没有选择任何要搬运的世界书条目');
+  }
+
+  await updateWorldbookWith(targetWorldbookName, currentEntries => {
+    const nextEntries = [...currentEntries];
+    const findIndexByName = (name: string): number =>
+      nextEntries.findIndex(entry => normalizeEntryName(entry.name) === normalizeEntryName(name));
+
+    selectedCandidates.forEach(candidate => {
+      const seed = cloneMoveCandidateEntry(candidate);
+      const existingIndex = findIndexByName(candidate.entryName);
+      if (existingIndex >= 0) {
+        nextEntries[existingIndex] = mergeTransferredEntry(nextEntries[existingIndex], seed) as WorldbookEntry;
+        return;
+      }
+      nextEntries.push(seed as WorldbookEntry);
+    });
+
+    return nextEntries;
+  });
+
+  let removedSourceCount = 0;
+  if (options.removeFromSource) {
+    const deletionsByWorldbook = new Map<string, Set<string>>();
+    selectedCandidates
+      .filter(candidate => candidate.sourceWorldbookName && candidate.sourceWorldbookName !== '脚本内置')
+      .filter(candidate => candidate.sourceWorldbookName !== targetWorldbookName)
+      .forEach(candidate => {
+        const names = deletionsByWorldbook.get(candidate.sourceWorldbookName) ?? new Set<string>();
+        names.add(candidate.entryName);
+        deletionsByWorldbook.set(candidate.sourceWorldbookName, names);
+      });
+
+    for (const [sourceWorldbookName, entryNames] of deletionsByWorldbook) {
+      const result = await deleteWorldbookEntries(sourceWorldbookName, entry =>
+        entryNames.has(normalizeEntryName(entry.name)),
+      );
+      removedSourceCount += result.deleted_entries.length;
+    }
+  }
+
+  const refreshedEntries = await getWorldbook(targetWorldbookName);
+  const updated = selectedCandidates.some(candidate =>
+    refreshedEntries.some(entry => normalizeEntryName(entry.name) === normalizeEntryName(candidate.entryName)),
   );
-  return result;
+
+  emitManagedWorldbookDebugLog(existed ? '已搬运条目到外部 worldbook' : '已创建外部 worldbook 并搬运条目', {
+    worldbookName: targetWorldbookName,
+    movedCount: selectedCandidates.length,
+    removedSourceCount,
+  });
+
+  return {
+    name: targetWorldbookName,
+    created: !existed,
+    updated,
+    movedCount: selectedCandidates.length,
+    removedSourceCount,
+    targetMode: 'stored_external',
+  };
 }
 
 export async function ensureCalendarManagedWorldbookEntries(): Promise<EnsureCalendarManagedWorldbookEntriesResult> {
@@ -616,6 +935,7 @@ export async function ensureCalendarManagedWorldbookEntries(): Promise<EnsureCal
     const result = await syncCalendarManagedCharacterEntries();
     diagnostics.connectivity =
       diagnostics.managementEnabled && diagnostics.allManagedEntriesPresent ? 'ready' : 'missing';
+    await refreshCalendarManagedWorldbookSourceDiagnostics();
     return result;
   } catch (error) {
     diagnostics.connectivity = 'error';

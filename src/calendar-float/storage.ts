@@ -7,15 +7,16 @@ import {
   MVU_TEMP_PATH,
   PRESET_TAG_OPTIONS,
   SCRIPT_NAME,
-  WORLD_TIME_PATH,
 } from './constants';
 import { formatDateKey, parseWorldDateAnchor } from './date';
 import { sanitizeBucketRecords, sanitizeRawEvent, sanitizeTagList } from './event-normalizer';
+import { getCalendarWorldTimePath } from './runtime-config';
 import type {
   ActiveCalendarBuckets,
   ArchivedCalendarEvent,
   CalendarArchiveStore,
   CalendarBucketType,
+  CalendarEventColorStyle,
   CalendarSourceConfig,
   CalendarSuggestionSet,
   CalendarTagOption,
@@ -39,6 +40,20 @@ function createEmptyArchivePolicy(): CalendarArchiveStore['policy'] {
   return {
     archiveOnActiveRemoval: true,
     skipArchiveTags: [],
+    autoDeleteTags: [],
+    protectedTags: ['收藏', '星标', 'favorite', 'favourite', 'starred'],
+    customTags: [],
+    tagColors: {
+      主线: { background: '#dcecff', text: '#305d97', border: 'rgba(95, 148, 216, 0.22)' },
+      支线: { background: '#e9e2ff', text: '#5c4a98', border: 'rgba(119, 98, 190, 0.22)' },
+      课程: { background: '#dff4e8', text: '#2f7048', border: 'rgba(77, 158, 103, 0.22)' },
+      约会: { background: '#ffe1eb', text: '#9a3d61', border: 'rgba(194, 91, 129, 0.22)' },
+      节庆: { background: '#ffe6a6', text: '#895710', border: 'rgba(201, 145, 40, 0.24)' },
+      旅行: { background: '#dff2f3', text: '#2d6f73', border: 'rgba(75, 155, 160, 0.22)' },
+      比赛: { background: '#ffe3cf', text: '#9a4b20', border: 'rgba(207, 111, 54, 0.22)' },
+      限时: { background: '#f1e6d8', text: '#73583c', border: 'rgba(139, 105, 67, 0.2)' },
+      纪念: { background: '#fff0c9', text: '#7a5916', border: 'rgba(191, 143, 68, 0.24)' },
+    },
   };
 }
 
@@ -110,12 +125,52 @@ function sanitizeSourceConfig(value: unknown): CalendarSourceConfig {
 function sanitizeArchivePolicy(value: unknown): CalendarArchiveStore['policy'] {
   const defaults = createEmptyArchivePolicy();
   const source = _.isPlainObject(value) ? (value as Record<string, unknown>) : {};
+  const skipArchiveTags = sanitizeTagList(source.skipArchiveTags);
+  const protectedTags = sanitizeTagList(source.protectedTags);
   return {
     archiveOnActiveRemoval: source.archiveOnActiveRemoval !== false,
-    skipArchiveTags: sanitizeTagList(source.skipArchiveTags).length
-      ? sanitizeTagList(source.skipArchiveTags)
-      : defaults.skipArchiveTags,
+    skipArchiveTags,
+    autoDeleteTags: sanitizeTagList(source.autoDeleteTags),
+    protectedTags: protectedTags.length
+      ? protectedTags
+      : skipArchiveTags.length
+        ? skipArchiveTags
+        : defaults.protectedTags,
+    customTags: sanitizeTagList(source.customTags),
+    tagColors: sanitizeTagColorMap(source.tagColors, defaults.tagColors),
   };
+}
+
+function sanitizeColorValue(value: unknown): string {
+  const text = String(value ?? '').trim();
+  return /^#[0-9a-fA-F]{3}(?:[0-9a-fA-F]{3})?$/.test(text) ? text : '';
+}
+
+function sanitizeTagColorMap(
+  value: unknown,
+  defaults: Record<string, CalendarEventColorStyle>,
+): Record<string, CalendarEventColorStyle> {
+  const source = _.isPlainObject(value) ? (value as Record<string, unknown>) : {};
+  const output: Record<string, CalendarEventColorStyle> = { ...defaults };
+  Object.entries(source).forEach(([tag, color]) => {
+    if (!_.isPlainObject(color)) {
+      return;
+    }
+    const raw = color as Record<string, unknown>;
+    const background = sanitizeColorValue(raw.background);
+    const text = sanitizeColorValue(raw.text);
+    const border = sanitizeColorValue(raw.border);
+    const normalizedTag = String(tag || '').trim();
+    if (!normalizedTag || !background || !text) {
+      return;
+    }
+    output[normalizedTag] = {
+      background,
+      text,
+      ...(border ? { border } : {}),
+    };
+  });
+  return output;
 }
 
 function cloneBucketsSnapshot(buckets: ActiveCalendarBuckets): ActiveCalendarBuckets {
@@ -276,7 +331,7 @@ export function getChatBoundCalendarWorldbookName(): string {
 }
 
 export function getAvailableCalendarWorldbooks(): string[] {
-  return getWorldbookNames()
+  return [...getWorldbookNames(), ...getGlobalWorldbookNames()]
     .map(name => String(name || '').trim())
     .filter(Boolean)
     .filter((name, index, array) => array.indexOf(name) === index)
@@ -291,16 +346,49 @@ function resolveArchiveReason(raw: RawCalendarEvent): ArchivedCalendarEvent['arc
       : 'completed';
 }
 
+function hasAnyPolicyTag(id: string, raw: RawCalendarEvent, tags: string[]): boolean {
+  if (!tags.length) {
+    return false;
+  }
+  const eventTags = collectEventTags(id, raw);
+  return eventTags.some(tag => tags.includes(tag));
+}
+
+export function resolveCalendarEventPolicyAction(
+  id: string,
+  raw: RawCalendarEvent,
+  policy: CalendarArchiveStore['policy'] = readArchiveStore().policy,
+): 'archive' | 'delete' | 'protect' {
+  if (hasAnyPolicyTag(id, raw, [...policy.protectedTags, ...policy.skipArchiveTags])) {
+    return 'protect';
+  }
+  if (hasAnyPolicyTag(id, raw, policy.autoDeleteTags)) {
+    return 'delete';
+  }
+  return 'archive';
+}
+
+export function resolveCalendarEventColor(
+  id: string,
+  raw: Pick<RawCalendarEvent, '标题' | '内容' | '标签'>,
+  policy: CalendarArchiveStore['policy'] = readArchiveStore().policy,
+): CalendarEventColorStyle | undefined {
+  const tags = collectEventTags(id, raw);
+  for (const tag of tags) {
+    const color = policy.tagColors[tag];
+    if (color) {
+      return color;
+    }
+  }
+  return undefined;
+}
+
 function shouldSkipArchiveByPolicy(args: {
   id: string;
   raw: RawCalendarEvent;
   policy: CalendarArchiveStore['policy'];
 }): boolean {
-  if (!args.policy.skipArchiveTags.length) {
-    return false;
-  }
-  const eventTags = collectEventTags(args.id, args.raw);
-  return eventTags.some(tag => args.policy.skipArchiveTags.includes(tag));
+  return resolveCalendarEventPolicyAction(args.id, args.raw, args.policy) !== 'archive';
 }
 
 function writeArchivedEvent(args: {
@@ -309,6 +397,7 @@ function writeArchivedEvent(args: {
   type: '临时' | '重复';
   raw: RawCalendarEvent;
   completedAt?: string;
+  archiveReason?: ArchivedCalendarEvent['archive_reason'];
 }): boolean {
   const normalizedRaw = sanitizeRawEvent(args.raw);
   if (shouldSkipArchiveByPolicy({ id: args.id, raw: normalizedRaw, policy: args.archive.policy })) {
@@ -322,7 +411,7 @@ function writeArchivedEvent(args: {
     completed_at: args.completedAt ?? '',
     tags: collectEventTags(args.id, normalizedRaw),
     preserved_for_player: true,
-    archive_reason: resolveArchiveReason(normalizedRaw),
+    archive_reason: args.archiveReason ?? resolveArchiveReason(normalizedRaw),
     ...normalizedRaw,
   };
   return true;
@@ -332,70 +421,133 @@ export async function archiveCompletedEvent(params: {
   id: string;
   type: '临时' | '重复';
   completedAt?: string;
-}): Promise<void> {
+}): Promise<'archived' | 'deleted' | 'protected' | 'missing'> {
   const buckets = await readActiveBuckets();
   const sourceBucket = params.type === '重复' ? buckets.重复 : buckets.临时;
   const raw = sourceBucket[params.id];
   if (!raw) {
-    return;
+    return 'missing';
   }
 
   const archive = readArchiveStore();
-  writeArchivedEvent({
-    archive,
-    id: params.id,
-    type: params.type,
-    raw,
-    completedAt: params.completedAt,
-  });
+  const policyAction = resolveCalendarEventPolicyAction(params.id, raw, archive.policy);
+  if (policyAction === 'protect') {
+    return 'protected';
+  }
+  if (policyAction === 'archive') {
+    writeArchivedEvent({
+      archive,
+      id: params.id,
+      type: params.type,
+      raw,
+      completedAt: params.completedAt,
+    });
+  }
 
   delete sourceBucket[params.id];
   archive.lastActiveSnapshot = cloneBucketsSnapshot(buckets);
   replaceArchiveStore(archive);
   await replaceActiveBuckets(buckets);
+  return policyAction === 'delete' ? 'deleted' : 'archived';
+}
+
+export async function removeActiveEventWithPolicy(params: {
+  id: string;
+  completedAt?: string;
+}): Promise<'archived' | 'deleted' | 'protected' | 'missing'> {
+  const buckets = await readActiveBuckets();
+  const type: CalendarBucketType | null = buckets.重复[params.id] ? '重复' : buckets.临时[params.id] ? '临时' : null;
+  if (!type) {
+    return 'missing';
+  }
+  const sourceBucket = type === '重复' ? buckets.重复 : buckets.临时;
+  const raw = sourceBucket[params.id];
+  const archive = readArchiveStore();
+  const policyAction = resolveCalendarEventPolicyAction(params.id, raw, archive.policy);
+
+  if (policyAction === 'protect') {
+    return 'protected';
+  }
+  if (policyAction === 'archive') {
+    writeArchivedEvent({
+      archive,
+      id: params.id,
+      type,
+      raw,
+      completedAt: params.completedAt,
+      archiveReason: 'manual_delete',
+    });
+  }
+
+  delete sourceBucket[params.id];
+  archive.lastActiveSnapshot = cloneBucketsSnapshot(buckets);
+  replaceArchiveStore(archive);
+  await replaceActiveBuckets(buckets);
+  return policyAction === 'delete' ? 'deleted' : 'archived';
 }
 
 export async function syncArchiveOnActiveRemoval(completedAt?: string): Promise<{
   archived: number;
   skipped: number;
+  deleted: number;
+  restored: number;
 }> {
   const buckets = await readActiveBuckets();
   const archive = readArchiveStore();
   const previous = archive.lastActiveSnapshot;
   let archived = 0;
   let skipped = 0;
+  let deleted = 0;
+  let restored = 0;
 
-  if (archive.policy.archiveOnActiveRemoval) {
-    (['临时', '重复'] as const).forEach(bucketType => {
-      const previousBucket = previous[bucketType] || {};
-      const currentBucket = buckets[bucketType] || {};
-      Object.entries(previousBucket).forEach(([id, raw]) => {
-        if (currentBucket[id]) {
-          return;
-        }
-        if (archive.completed[id]) {
-          return;
-        }
-        if (
-          writeArchivedEvent({
-            archive,
-            id,
-            type: bucketType,
-            raw,
-            completedAt,
-          })
-        ) {
-          archived += 1;
-          return;
-        }
+  (['临时', '重复'] as const).forEach(bucketType => {
+    const previousBucket = previous[bucketType] || {};
+    const currentBucket = buckets[bucketType] || {};
+    Object.entries(previousBucket).forEach(([id, raw]) => {
+      if (currentBucket[id]) {
+        return;
+      }
+      if (archive.completed[id]) {
+        return;
+      }
+
+      const policyAction = resolveCalendarEventPolicyAction(id, raw, archive.policy);
+      if (policyAction === 'protect') {
+        currentBucket[id] = raw;
+        restored += 1;
+        return;
+      }
+      if (policyAction === 'delete') {
+        deleted += 1;
+        return;
+      }
+      if (!archive.policy.archiveOnActiveRemoval) {
         skipped += 1;
-      });
+        return;
+      }
+      if (
+        writeArchivedEvent({
+          archive,
+          id,
+          type: bucketType,
+          raw,
+          completedAt,
+        })
+      ) {
+        archived += 1;
+        return;
+      }
+      skipped += 1;
     });
+  });
+
+  if (restored > 0) {
+    await replaceActiveBuckets(buckets);
   }
 
   archive.lastActiveSnapshot = cloneBucketsSnapshot(buckets);
   replaceArchiveStore(archive);
-  return { archived, skipped };
+  return { archived, skipped, deleted, restored };
 }
 
 export async function restoreArchivedEvent(id: string): Promise<void> {
@@ -415,13 +567,46 @@ export async function restoreArchivedEvent(id: string): Promise<void> {
   await replaceActiveBuckets(buckets);
 }
 
-export function readCurrentWorldTime(): {
+export function purgeArchivedEventWithPolicy(id: string): 'deleted' | 'protected' | 'missing' {
+  const archive = readArchiveStore();
+  const archived = archive.completed[id];
+  if (!archived) {
+    return 'missing';
+  }
+  if (resolveCalendarEventPolicyAction(id, archived, archive.policy) === 'protect') {
+    return 'protected';
+  }
+  delete archive.completed[id];
+  replaceArchiveStore(archive);
+  return 'deleted';
+}
+
+export function purgeAutoDeleteArchivedEvents(): { deleted: number; protected: number } {
+  const archive = readArchiveStore();
+  let deleted = 0;
+  let protectedCount = 0;
+  Object.entries(archive.completed).forEach(([id, event]) => {
+    const action = resolveCalendarEventPolicyAction(id, event, archive.policy);
+    if (action === 'protect') {
+      protectedCount += 1;
+      return;
+    }
+    if (action === 'delete') {
+      delete archive.completed[id];
+      deleted += 1;
+    }
+  });
+  replaceArchiveStore(archive);
+  return { deleted, protected: protectedCount };
+}
+
+export function readCurrentWorldTime(path = getCalendarWorldTimePath()): {
   text: string;
   point: DatePoint | null;
   anchor: { dateKey: string; weekday: number } | null;
 } {
   const messageData = readMessageVariableData();
-  const text = String(_.get(messageData, WORLD_TIME_PATH, '') || '');
+  const text = String(_.get(messageData, path, '') || '');
   const parsed = parseWorldDateAnchor(text);
   return {
     text,
@@ -445,6 +630,11 @@ export function buildSuggestionSet(args: {
   const idPool = new Set<string>();
 
   PRESET_TAG_OPTIONS.forEach(option => tagMap.set(option.value, option));
+  args.archive.policy.customTags.forEach(tag => {
+    if (!tagMap.has(tag)) {
+      tagMap.set(tag, { value: tag, label: tag, source: 'custom' });
+    }
+  });
 
   const collect = (id: string, event: RawCalendarEvent | ArchivedCalendarEvent): void => {
     if (id) {

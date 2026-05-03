@@ -1,4 +1,11 @@
 import { clamp } from 'lodash';
+import {
+  buildElliaBetaTicketCalendarEventsForMonth,
+  ensureElliaBetaTicketStyle,
+  isElliaBetaTicketBookId,
+  renderElliaBetaTicketBookView,
+  renderElliaTicketAddOnForDate,
+} from '../dlc_ellia';
 import { buildDailyAgenda, buildMonthCells, buildReminderState } from './calendar-view-model';
 import { INSTANCE_KEY, ROOT_ID, SCRIPT_NAME, STYLE_ID } from './constants';
 import { formatDateKey } from './date';
@@ -9,15 +16,19 @@ import {
   archiveCompletedEvent,
   ensureMvuReady,
   getAvailableCalendarWorldbooks,
-  readActiveBuckets,
+  purgeArchivedEventWithPolicy,
+  purgeAutoDeleteArchivedEvents,
   readArchiveStore,
   readCurrentWorldTime,
-  replaceActiveBuckets,
-  replaceArchiveStore,
+  removeActiveEventWithPolicy,
+  replaceCalendarArchivePolicy,
   restoreArchivedEvent,
   syncArchiveOnActiveRemoval,
 } from './storage';
 import type {
+  CalendarArchivePolicy,
+  CalendarEventColorStyle,
+  CalendarMonthAliasRecord,
   DailyAgendaGroup,
   DailyAgendaItem,
   DatePoint,
@@ -30,6 +41,7 @@ import { bindCalendarWidgetEvents } from './widget-events';
 import { getViewportSize, isDesktopViewport } from './widget-layout';
 import {
   renderAgendaPanel as renderAgendaPanelExternal,
+  renderArchivePanel as renderArchivePanelExternal,
   renderBookMainView as renderBookMainViewExternal,
   renderCalendarMonthView,
   renderDetailPanel as renderDetailPanelExternal,
@@ -39,8 +51,12 @@ import {
   getCalendarManagedWorldbookDiagnostics,
   installCalendarManagedEntriesToExternalWorldbook,
   installCalendarManagedWorldbookEntries,
+  listCalendarWorldbookMoveCandidates,
+  refreshCalendarManagedWorldbookRuntimeDiagnostics,
+  refreshCalendarManagedWorldbookSourceDiagnostics,
   uninstallCalendarManagedWorldbookEntries,
   type CalendarManagedWorldbookDiagnostics,
+  type CalendarWorldbookMoveCandidate,
 } from './worldbook-backend-manager';
 
 const hostWindow =
@@ -48,10 +64,6 @@ const hostWindow =
     ? (window.parent as Window & typeof globalThis)
     : window;
 const hostDocument = hostWindow.document;
-const renderMarkdownApi = (() => {
-  const maybeApi = (hostWindow as unknown as { renderMarkdown?: unknown }).renderMarkdown;
-  return typeof maybeApi === 'function' ? (maybeApi as (input: string) => string) : null;
-})();
 const showdownConverterCtor = (() => {
   const maybeShowdown = (
     hostWindow as unknown as {
@@ -72,8 +84,23 @@ const markdownConverter = showdownConverterCtor
     })
   : null;
 
-type SidebarTab = 'detail' | 'form';
-type ManagedWorldbookDialogMode = 'menu' | 'confirm-uninstall' | 'confirm-reinstall';
+type SidebarTab = 'detail' | 'form' | 'archive';
+type ManagedWorldbookDialogMode = 'menu' | 'confirm-uninstall' | 'confirm-reinstall' | 'export-external';
+
+const TAG_COLOR_PALETTE: Array<CalendarEventColorStyle & { name: string }> = [
+  { name: '天空蓝', background: '#dcecff', text: '#305d97', border: '#a8c7ed' },
+  { name: '薰衣草', background: '#e9e2ff', text: '#5c4a98', border: '#c8bbf4' },
+  { name: '薄荷绿', background: '#dff4e8', text: '#2f7048', border: '#a9d9b9' },
+  { name: '玫瑰粉', background: '#ffe1eb', text: '#9a3d61', border: '#efadc2' },
+  { name: '蜜糖黄', background: '#ffe6a6', text: '#895710', border: '#e8bf59' },
+  { name: '湖水青', background: '#dff2f3', text: '#2d6f73', border: '#a7d4d7' },
+  { name: '珊瑚橙', background: '#ffe3cf', text: '#9a4b20', border: '#efb186' },
+  { name: '暖灰褐', background: '#f1e6d8', text: '#73583c', border: '#d3bea6' },
+  { name: '石榴红', background: '#ffd8d2', text: '#9b2f2f', border: '#ee9e96' },
+  { name: '墨绿', background: '#d8efe2', text: '#276153', border: '#9fcfba' },
+  { name: '靛蓝', background: '#dfe6ff', text: '#3d4c93', border: '#aebcf0' },
+  { name: '银雾', background: '#e8edf2', text: '#4d5c6b', border: '#bdc7d1' },
+];
 
 const refs: WidgetRefs = {
   root: null,
@@ -99,6 +126,13 @@ const state: WidgetState = {
   editingEventId: null,
 };
 
+let monthAliases: CalendarMonthAliasRecord[] = [];
+
+const BALL_POSITION_VAR_KEY = 'calendar_float_ball_position';
+const BALL_DEFAULT_SIZE = 56;
+const BALL_VIEWPORT_MARGIN = 8;
+const BALL_DRAG_CLICK_THRESHOLD = 4;
+
 const uiState = {
   sidebarTab: 'detail' as SidebarTab,
   panelLeft: null as number | null,
@@ -108,6 +142,15 @@ const uiState = {
   dragStartY: 0,
   dragOriginLeft: 0,
   dragOriginTop: 0,
+  ballLeft: null as number | null,
+  ballTop: null as number | null,
+  ballDragging: false,
+  ballMoved: false,
+  ballSuppressNextClick: false,
+  ballDragStartX: 0,
+  ballDragStartY: 0,
+  ballDragOriginLeft: 0,
+  ballDragOriginTop: 0,
   openedBookId: null as string | null,
   openedBookPageIndex: 0,
   theme: 'light' as 'light' | 'dark',
@@ -117,6 +160,11 @@ const uiState = {
   managedWorldbookDialogOpen: false,
   managedWorldbookDialogMode: null as ManagedWorldbookDialogMode | null,
   managedWorldbookDialogDiagnostics: null as CalendarManagedWorldbookDiagnostics | null,
+  managedWorldbookMoveCandidates: [] as CalendarWorldbookMoveCandidate[],
+  managedWorldbookMoveWarnings: [] as string[],
+  tagColorDialogOpen: false,
+  selectedTagColorTag: '主线',
+  tagColorFeedback: '',
 };
 
 function getTodayPoint(): DatePoint {
@@ -145,6 +193,94 @@ function escapeHtml(value: unknown): string {
     .replace(/'/g, '&#39;');
 }
 
+function isValidHexColor(value: string): boolean {
+  return /^#[0-9a-fA-F]{3}(?:[0-9a-fA-F]{3})?$/.test(value.trim());
+}
+
+function expandHexColor(value: string): string {
+  const text = value.trim();
+  if (/^#[0-9a-fA-F]{3}$/.test(text)) {
+    return `#${text[1]}${text[1]}${text[2]}${text[2]}${text[3]}${text[3]}`;
+  }
+  return text;
+}
+
+function getHexRgb(value: string): { red: number; green: number; blue: number } | null {
+  if (!isValidHexColor(value)) {
+    return null;
+  }
+  const hex = expandHexColor(value).slice(1);
+  return {
+    red: parseInt(hex.slice(0, 2), 16),
+    green: parseInt(hex.slice(2, 4), 16),
+    blue: parseInt(hex.slice(4, 6), 16),
+  };
+}
+
+function getRelativeLuminance(value: string): number | null {
+  const rgb = getHexRgb(value);
+  if (!rgb) {
+    return null;
+  }
+  const convert = (channel: number): number => {
+    const normalized = channel / 255;
+    return normalized <= 0.03928 ? normalized / 12.92 : ((normalized + 0.055) / 1.055) ** 2.4;
+  };
+  return 0.2126 * convert(rgb.red) + 0.7152 * convert(rgb.green) + 0.0722 * convert(rgb.blue);
+}
+
+function getContrastRatio(background: string, text: string): number | null {
+  const backgroundLuminance = getRelativeLuminance(background);
+  const textLuminance = getRelativeLuminance(text);
+  if (backgroundLuminance === null || textLuminance === null) {
+    return null;
+  }
+  const lighter = Math.max(backgroundLuminance, textLuminance);
+  const darker = Math.min(backgroundLuminance, textLuminance);
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
+function stripDangerousMarkdownHtml(html: string): string {
+  return html
+    .replace(/<\s*style[\s\S]*?<\s*\/\s*style\s*>/gi, '')
+    .replace(/<\s*script[\s\S]*?<\s*\/\s*script\s*>/gi, '')
+    .replace(/\sstyle\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, '')
+    .replace(/\son\w+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, '');
+}
+
+function renderBasicMarkdownContent(text: string): string {
+  const blocks = text
+    .split(/\n{2,}/)
+    .map(block => block.trim())
+    .filter(Boolean);
+  if (!blocks.length) {
+    return '<p>（暂无内容）</p>';
+  }
+  return blocks
+    .map(block => {
+      const heading = block.match(/^(#{1,6})\s+(.+)$/);
+      if (heading) {
+        const level = Math.min(heading[1].length, 6);
+        return `<h${level}>${escapeHtml(heading[2])}</h${level}>`;
+      }
+      const lines = block
+        .split(/\n/)
+        .map(line => line.trim())
+        .filter(Boolean);
+      if (lines.length && lines.every(line => /^[-*+]\s+/.test(line))) {
+        return `<ul>${lines.map(line => `<li>${escapeHtml(line.replace(/^[-*+]\s+/, ''))}</li>`).join('')}</ul>`;
+      }
+      if (lines.length && lines.every(line => /^\d+[.)]\s+/.test(line))) {
+        return `<ol>${lines.map(line => `<li>${escapeHtml(line.replace(/^\d+[.)]\s+/, ''))}</li>`).join('')}</ol>`;
+      }
+      if (lines.length && lines.every(line => /^>\s?/.test(line))) {
+        return `<blockquote>${lines.map(line => escapeHtml(line.replace(/^>\s?/, ''))).join('<br>')}</blockquote>`;
+      }
+      return `<p>${escapeHtml(block).replace(/\n/g, '<br>')}</p>`;
+    })
+    .join('');
+}
+
 function renderMarkdownContent(markdown: string): string {
   const text = String(markdown || '').trim();
   if (!text) {
@@ -153,25 +289,13 @@ function renderMarkdownContent(markdown: string): string {
 
   if (markdownConverter) {
     try {
-      return markdownConverter.makeHtml(text);
+      return stripDangerousMarkdownHtml(markdownConverter.makeHtml(text));
     } catch (error) {
       console.warn(`[${SCRIPT_NAME}] showdown Markdown 渲染失败`, error);
     }
   }
 
-  if (renderMarkdownApi) {
-    try {
-      const rendered = renderMarkdownApi(text);
-      const hasHtmlStructure = /<\s*(h\d|p|ul|ol|li|blockquote|pre|code|hr|table|em|strong|a)\b/i.test(rendered);
-      if (hasHtmlStructure) {
-        return rendered;
-      }
-    } catch (error) {
-      console.warn(`[${SCRIPT_NAME}] 宿主 Markdown 渲染失败`, error);
-    }
-  }
-
-  return `<p>${escapeHtml(text).replace(/\n/g, '<br>')}</p>`;
+  return renderBasicMarkdownContent(text);
 }
 
 function isDesktopMode(): boolean {
@@ -201,7 +325,7 @@ function applyTheme(): void {
   const toggle = refs.root.querySelector<HTMLButtonElement>('[data-action="toggle-theme"]');
   if (toggle) {
     const nextTitle = uiState.theme === 'dark' ? '切换到白天主题' : '切换到夜晚主题';
-    toggle.textContent = uiState.theme === 'dark' ? '☀' : '☾';
+    toggle.textContent = uiState.theme === 'dark' ? '切换到白天主题' : '切换到夜晚主题';
     toggle.title = nextTitle;
     toggle.setAttribute('aria-label', nextTitle);
   }
@@ -237,6 +361,7 @@ function toggleTheme(): void {
 
 function ensureStyle(): void {
   ensureCalendarWidgetStyle(hostDocument);
+  ensureElliaBetaTicketStyle(hostDocument);
 }
 
 function ensureRoot(): void {
@@ -252,6 +377,8 @@ function ensureRoot(): void {
   root.dataset.tab = uiState.sidebarTab;
   root.dataset.theme = uiState.theme;
   root.dataset.mobileSideOpen = 'false';
+  root.dataset.tagColorOpen = 'false';
+  root.dataset.externalHost = 'false';
   root.dataset.managedWorldbookConnectivity = 'unknown';
   root.innerHTML = `
     <button type="button" class="th-calendar-ball" aria-label="打开月历">📅</button>
@@ -259,17 +386,21 @@ function ensureRoot(): void {
       <div class="th-calendar-shell">
         <section class="th-calendar-main">
           <div class="th-main-head" data-drag-handle="panel">
-            <div class="th-main-head-copy">
-              <div class="th-main-title">月历悬浮球</div>
-              <button type="button" class="th-connectivity-button" data-action="managed-worldbook-connectivity" data-state="unknown" aria-label="托管 worldbook backend 条目状态按钮">
-                <span class="th-connectivity-dot"></span>
-                <span class="th-connectivity-text">WB Backend: 检查中</span>
-              </button>
-            </div>
-            <div class="th-window-actions">
-              <button type="button" class="th-btn" data-action="toggle-theme" title="切换到夜晚主题" aria-label="切换到夜晚主题">☾</button>
-              <button type="button" class="th-btn" data-action="reload" title="刷新">↻</button>
-              <button type="button" class="th-btn" data-action="close" title="关闭">✕</button>
+            <details class="th-tools-menu th-tools-menu--left">
+              <summary class="th-btn th-menu-status-btn" title="设置菜单" aria-label="设置菜单">
+                <span class="th-status-light-only" aria-hidden="true"></span>
+              </summary>
+              <div class="th-tool-menu-panel" role="menu" aria-label="设置菜单">
+                <button type="button" class="th-tool-menu-item" data-action="toggle-theme" role="menuitem">主题颜色</button>
+                <button type="button" class="th-tool-menu-item" data-action="open-tag-color-panel" role="menuitem">标签颜色</button>
+                <button type="button" class="th-tool-menu-item th-connectivity-button" data-action="managed-worldbook-connectivity" data-state="unknown" role="menuitem" aria-label="更多设置">
+                  <span class="th-connectivity-text">更多设置</span>
+                </button>
+              </div>
+            </details>
+            <div class="th-window-actions" aria-label="窗口操作">
+              <button type="button" class="th-btn" data-action="reload" title="刷新" aria-label="刷新">↻</button>
+              <button type="button" class="th-btn" data-action="close" title="关闭" aria-label="关闭">×</button>
             </div>
           </div>
           <div data-role="month-grid"></div>
@@ -283,6 +414,8 @@ function ensureRoot(): void {
           </div>
           <div class="th-sidebar-tabs">
             <button type="button" class="th-tab-button" data-action="switch-tab" data-tab="detail">日期详情</button>
+            <button type="button" class="th-tab-button" data-action="switch-tab" data-tab="archive">归档</button>
+            <button type="button" class="th-btn th-side-search-btn" data-action="focus-agenda-filter" aria-label="搜索事件" title="搜索事件">⌕</button>
             <button type="button" class="th-tab-button th-primary-btn th-tab-add-button" data-action="open-create-form" data-role="sidebar-create-entry" aria-label="新增事件" title="新增事件">+</button>
           </div>
           <div class="th-side-body">
@@ -293,7 +426,8 @@ function ensureRoot(): void {
         <button type="button" class="th-btn th-fab-add" data-action="open-create-form" aria-label="新增事件">+</button>
       </div>
     </section>
-    <div class="th-managed-worldbook-dialog-layer" data-role="managed-worldbook-dialog-layer" aria-hidden="true"></div>
+    <dialog class="th-managed-worldbook-dialog-layer" data-role="managed-worldbook-dialog-layer" aria-hidden="true"></dialog>
+    <dialog class="th-managed-worldbook-dialog-layer" data-role="tag-color-dialog-layer" aria-hidden="true"></dialog>
   `;
 
   hostDocument.body.appendChild(root);
@@ -305,6 +439,7 @@ function ensureRoot(): void {
   refs.agendaList = null;
   refs.detailPanel = root.querySelector<HTMLElement>('[data-role="detail-panel"]');
   refs.formPanel = root.querySelector<HTMLElement>('[data-role="form-panel"]');
+  restoreBallPosition();
 }
 
 function getEditingRecord() {
@@ -331,6 +466,82 @@ function syncStateAnchors(): void {
   }
 }
 
+function clampBallPosition(left: number, top: number): { left: number; top: number } {
+  const viewport = getViewportSize({ hostWindow, hostDocument });
+  const ballWidth = refs.ball?.offsetWidth || BALL_DEFAULT_SIZE;
+  const ballHeight = refs.ball?.offsetHeight || BALL_DEFAULT_SIZE;
+  return {
+    left: clamp(
+      left,
+      BALL_VIEWPORT_MARGIN,
+      Math.max(BALL_VIEWPORT_MARGIN, viewport.width - ballWidth - BALL_VIEWPORT_MARGIN),
+    ),
+    top: clamp(
+      top,
+      BALL_VIEWPORT_MARGIN,
+      Math.max(BALL_VIEWPORT_MARGIN, viewport.height - ballHeight - BALL_VIEWPORT_MARGIN),
+    ),
+  };
+}
+
+function getDefaultBallPosition(): { left: number; top: number } {
+  const viewport = getViewportSize({ hostWindow, hostDocument });
+  return clampBallPosition(viewport.width - BALL_DEFAULT_SIZE - 18, Math.round(viewport.height * 0.32));
+}
+
+function readSavedBallPosition(): { left: number; top: number } | null {
+  try {
+    const raw = getVariables({ type: 'global' })?.[BALL_POSITION_VAR_KEY];
+    const value = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    const left = Number(value?.left);
+    const top = Number(value?.top);
+    return Number.isFinite(left) && Number.isFinite(top) ? { left, top } : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function saveBallPosition(): void {
+  if (uiState.ballLeft == null || uiState.ballTop == null) {
+    return;
+  }
+  try {
+    insertOrAssignVariables(
+      {
+        [BALL_POSITION_VAR_KEY]: JSON.stringify({ left: uiState.ballLeft, top: uiState.ballTop }),
+      },
+      { type: 'global' },
+    );
+  } catch (error) {
+    console.warn(`[${SCRIPT_NAME}] 保存悬浮按钮位置失败`, error);
+  }
+}
+
+function applyBallPosition(): void {
+  if (!refs.ball) {
+    return;
+  }
+  if (uiState.ballLeft == null || uiState.ballTop == null) {
+    const position = getDefaultBallPosition();
+    uiState.ballLeft = position.left;
+    uiState.ballTop = position.top;
+  }
+  const position = clampBallPosition(uiState.ballLeft, uiState.ballTop);
+  uiState.ballLeft = position.left;
+  uiState.ballTop = position.top;
+  refs.ball.style.left = `${position.left}px`;
+  refs.ball.style.top = `${position.top}px`;
+  refs.ball.style.right = 'auto';
+}
+
+function restoreBallPosition(): void {
+  const position = readSavedBallPosition() ?? getDefaultBallPosition();
+  const clampedPosition = clampBallPosition(position.left, position.top);
+  uiState.ballLeft = clampedPosition.left;
+  uiState.ballTop = clampedPosition.top;
+  applyBallPosition();
+}
+
 function applyPanelPosition(): void {
   if (!refs.panel || !isDesktopMode()) {
     return;
@@ -341,73 +552,69 @@ function applyPanelPosition(): void {
 
 function buildManagedWorldbookSummaryLines(diagnostics: CalendarManagedWorldbookDiagnostics): string[] {
   return [
-    `主 Worldbook: ${diagnostics.worldbookName || '（未绑定主 worldbook）'}`,
-    `状态: ${diagnostics.connectivity}`,
-    `管理开关: ${diagnostics.managementEnabled ? '启用' : '已关闭'}`,
-    `Backend 条目总数: ${diagnostics.managedEntryCount}/${diagnostics.expectedManagedEntryCount}`,
-    `manifest: ${diagnostics.hasMetaEntry ? '是' : '否'}`,
-    `变量列表: ${diagnostics.hasVariableListEntry ? '是' : '否'}`,
-    `mvu_update: ${diagnostics.hasUpdateRulesEntry ? '是' : '否'}`,
-    `条目完整: ${diagnostics.allManagedEntriesPresent ? '是' : '否'}`,
-    diagnostics.lastError ? `最近错误: ${diagnostics.lastError}` : '最近错误: 无',
+    `当前后端目标：${diagnostics.worldbookName || '（未绑定）'}`,
+    `基础条目：${diagnostics.managedEntryCount}/${diagnostics.expectedManagedEntryCount}`,
+    `更新规则：${diagnostics.hasUpdateRulesEntry ? '已找到' : '缺失'}`,
+    `变量展示：${diagnostics.hasVariableListEntry ? '已找到' : '缺失'}`,
+    `运行时索引：${diagnostics.runtimeIndexWorldbookName || '（未找到）'}`,
+    `正文来源：${
+      diagnostics.runtimeContentWorldbookNames.length > 0
+        ? diagnostics.runtimeContentWorldbookNames.join('、')
+        : '（未找到）'
+    }`,
   ];
 }
 
+function buildManagedWorldbookSourceHtml(diagnostics: CalendarManagedWorldbookDiagnostics): string {
+  const groups: Array<{ group: 'event' | 'book' | 'utility'; title: string }> = [
+    { group: 'event', title: 'event / 节庆' },
+    { group: 'book', title: 'book / 读物' },
+    { group: 'utility', title: 'utility / 基础规则' },
+  ];
+  const items = diagnostics.sourceItems ?? [];
+  return groups
+    .map(({ group, title }) => {
+      const groupItems = items.filter(item => item.group === group);
+      const body = groupItems.length
+        ? groupItems
+            .map(
+              item => `
+                <li class="th-managed-source-item">
+                  <span class="th-managed-source-name">${escapeHtml(item.label)}</span>
+                  <span class="th-managed-source-path">source: ${escapeHtml(item.sourceWorldbookName || '（未找到）')} / ${escapeHtml(item.entryName || '（无条目名）')}</span>
+                </li>
+              `,
+            )
+            .join('')
+        : '<li class="th-managed-source-empty">没有读取到来源</li>';
+      return `
+        <section class="th-managed-source-group">
+          <div class="th-managed-source-title">${escapeHtml(title)}</div>
+          <ul class="th-managed-source-list">${body}</ul>
+        </section>
+      `;
+    })
+    .join('');
+}
+
 /**
- * UI 只展示“角色主 worldbook backend 条目状态”，不宣称实际生成插入链路已验证通过。
- * 这样后续维护者不会误把 diagnostics 当成真实生成结果。
+ * UI 入口保持为“更多设置”；正常状态不在菜单按钮上显示后端诊断，只在弹窗内展示调试信息。
  */
 function getConnectivityButtonCopy(diagnostics: CalendarManagedWorldbookDiagnostics): {
   text: string;
   title: string;
 } {
   const installedText = `${diagnostics.managedEntryCount}/${diagnostics.expectedManagedEntryCount}`;
-  switch (diagnostics.connectivity) {
-    case 'ready':
-      return {
-        text: `WB Backend: 已安装 ${installedText}`,
-        title: `worldbook backend 条目已安装到角色主 worldbook；当前 ${installedText}，点击打开操作菜单`,
-      };
-    case 'recreated':
-      return {
-        text: `WB Backend: 已重建 ${installedText}`,
-        title: `worldbook backend 条目已重新写入角色主 worldbook；当前 ${installedText}，点击打开操作菜单`,
-      };
-    case 'missing': {
-      const verb = uiState.managedWorldbookBusy ? '处理中…' : '点击导入';
-      if (!diagnostics.managementEnabled) {
-        return {
-          text: uiState.managedWorldbookBusy ? 'WB Backend: 重新安装中…' : `WB Backend: 已卸载 ${installedText}`,
-          title: uiState.managedWorldbookBusy
-            ? '正在重新安装 worldbook backend 条目到角色主 worldbook'
-            : `worldbook backend 条目已卸载或管理开关关闭；当前 ${installedText}，点击打开操作菜单`,
-        };
-      }
-      return {
-        text: `WB Backend: 缺失 ${installedText}，${verb}`,
-        title: uiState.managedWorldbookBusy
-          ? '正在补齐角色主 worldbook 中的 backend 条目'
-          : `角色主 worldbook 中 backend 条目不完整；当前 ${installedText}，点击打开操作菜单`,
-      };
-    }
-    case 'checking':
-      return {
-        text: 'WB Backend: 检查中',
-        title: '脚本正在检查角色主 worldbook 中的 backend 条目状态',
-      };
-    case 'error':
-      return {
-        text: uiState.managedWorldbookBusy ? 'WB Backend: 重试中…' : `WB Backend: 错误 ${installedText}`,
-        title: uiState.managedWorldbookBusy
-          ? '正在尝试重建角色主 worldbook 中的 backend 条目'
-          : `脚本读取角色主 worldbook 失败；当前 ${installedText}，点击打开操作菜单`,
-      };
-    default:
-      return {
-        text: 'WB Backend: 未检查',
-        title: '尚未检查角色主 worldbook 的 backend 条目状态',
-      };
-  }
+  const stateText =
+    diagnostics.connectivity === 'checking'
+      ? '正在检查世界书后端条目'
+      : diagnostics.connectivity === 'error'
+        ? `世界书后端检查失败；当前 ${installedText}`
+        : `打开更多设置；世界书后端 ${installedText}`;
+  return {
+    text: uiState.managedWorldbookBusy ? '更多设置…' : '更多设置',
+    title: stateText,
+  };
 }
 
 function updateManagedWorldbookButton(): void {
@@ -428,6 +635,23 @@ function updateManagedWorldbookButton(): void {
   const textNode = button.querySelector<HTMLElement>('.th-connectivity-text');
   if (textNode) {
     textNode.textContent = copy.text;
+  }
+}
+
+function syncDialogLayerOpen(layer: HTMLElement, open: boolean): void {
+  layer.dataset.open = open ? 'true' : 'false';
+  layer.setAttribute('aria-hidden', open ? 'false' : 'true');
+  if (!(layer instanceof hostWindow.HTMLDialogElement)) {
+    return;
+  }
+  try {
+    if (open && !layer.open) {
+      layer.showModal();
+    } else if (!open && layer.open) {
+      layer.close();
+    }
+  } catch (error) {
+    console.warn(`[${SCRIPT_NAME}] 同步弹窗 top-layer 状态失败`, error);
   }
 }
 
@@ -459,8 +683,7 @@ function renderManagedWorldbookDialog(): void {
   }
 
   if (!uiState.managedWorldbookDialogOpen || !uiState.managedWorldbookDialogMode) {
-    layer.dataset.open = 'false';
-    layer.setAttribute('aria-hidden', 'true');
+    syncDialogLayerOpen(layer, false);
     layer.innerHTML = '';
     return;
   }
@@ -470,35 +693,110 @@ function renderManagedWorldbookDialog(): void {
     .map(line => `<li class="th-managed-worldbook-dialog-summary-item">${escapeHtml(line)}</li>`)
     .join('');
   const uninstallDisabled = diagnostics.managedEntryCount <= 0;
+  const sourceHtml = buildManagedWorldbookSourceHtml(diagnostics);
 
-  let title = 'WB Backend 操作';
-  let description = '请选择要执行的操作。';
+  let title = '更多设置';
+  let description =
+    '这里显示脚本实际读到的 event / book / utility 来源与后端诊断。正常使用时不需要操作；重装/卸载仅作为 debug/dev 工具。';
+  let bodyHtml = '';
   let actionHtml = [
-    `<button type="button" class="th-btn th-managed-worldbook-dialog-btn is-danger" data-action="managed-worldbook-menu-uninstall" ${uninstallDisabled ? 'disabled' : ''}>uninstall</button>`,
-    '<button type="button" class="th-btn th-primary-btn th-managed-worldbook-dialog-btn" data-action="managed-worldbook-menu-reinstall">reinstall</button>',
-    '<button type="button" class="th-btn th-managed-worldbook-dialog-btn" data-action="managed-worldbook-menu-export-external">export to external worldbook</button>',
-    '<button type="button" class="th-btn th-managed-worldbook-dialog-btn" data-action="managed-worldbook-dialog-return">return</button>',
+    '<div class="th-managed-worldbook-action-row is-primary">',
+    '<button type="button" class="th-btn th-managed-worldbook-dialog-btn" data-action="managed-worldbook-menu-export-external">搬运到其他 worldbook</button>',
+    '<button type="button" class="th-btn th-managed-worldbook-dialog-btn" data-action="managed-worldbook-dialog-return">关闭</button>',
+    '</div>',
+    '<div class="th-managed-worldbook-action-row is-secondary th-managed-worldbook-dev-actions">',
+    '<button type="button" class="th-btn th-managed-worldbook-dialog-btn" data-action="managed-worldbook-menu-reinstall">Dev: 重装后端条目</button>',
+    `<button type="button" class="th-btn th-managed-worldbook-dialog-btn is-danger" data-action="managed-worldbook-menu-uninstall" ${uninstallDisabled ? 'disabled' : ''}>Dev: 卸载后端条目</button>`,
+    '</div>',
   ].join('');
 
   if (uiState.managedWorldbookDialogMode === 'confirm-uninstall') {
     title = '确认卸载';
     description =
-      'Are you sure remove all? This will uninstall all script-managed backend entries from the current main worldbook.';
+      '确定要卸载吗？这只会从当前后端目标 worldbook 中删除脚本托管的 utility 条目，不会删除节庆/书籍正文来源。';
     actionHtml = [
-      '<button type="button" class="th-btn th-managed-worldbook-dialog-btn is-danger" data-action="managed-worldbook-confirm-uninstall">yes</button>',
-      '<button type="button" class="th-btn th-managed-worldbook-dialog-btn" data-action="managed-worldbook-dialog-return">no</button>',
+      '<div class="th-managed-worldbook-action-row is-secondary">',
+      '<button type="button" class="th-btn th-managed-worldbook-dialog-btn is-danger" data-action="managed-worldbook-confirm-uninstall">确认卸载</button>',
+      '<button type="button" class="th-btn th-managed-worldbook-dialog-btn" data-action="managed-worldbook-dialog-return">取消</button>',
+      '</div>',
     ].join('');
   } else if (uiState.managedWorldbookDialogMode === 'confirm-reinstall') {
     title = '确认重装';
-    description = 'All managed entries will reset to default. Are you sure to do that?';
+    description = '两个托管后端条目会重置为默认内容：mvu_update 规则与当前日历内容展示。确定要继续吗？';
     actionHtml = [
-      '<button type="button" class="th-btn th-primary-btn th-managed-worldbook-dialog-btn" data-action="managed-worldbook-confirm-reinstall">yes</button>',
-      '<button type="button" class="th-btn th-managed-worldbook-dialog-btn" data-action="managed-worldbook-dialog-return">no</button>',
+      '<div class="th-managed-worldbook-action-row is-primary">',
+      '<button type="button" class="th-btn th-primary-btn th-managed-worldbook-dialog-btn" data-action="managed-worldbook-confirm-reinstall">确认重装</button>',
+      '<button type="button" class="th-btn th-managed-worldbook-dialog-btn" data-action="managed-worldbook-dialog-return">取消</button>',
+      '</div>',
+    ].join('');
+  } else if (uiState.managedWorldbookDialogMode === 'export-external') {
+    const diagnosticsWorldbookName = String(diagnostics.worldbookName || '').trim();
+    const availableNames = getAvailableCalendarWorldbooks()
+      .map(name => String(name || '').trim())
+      .filter(Boolean);
+    const suggestedName = availableNames.find(name => name !== diagnosticsWorldbookName) ?? `${SCRIPT_NAME}-backend`;
+    const worldbookListHtml = availableNames.length
+      ? availableNames
+          .map(
+            name =>
+              `<button type="button" class="th-worldbook-picker-item" data-action="managed-worldbook-pick-export-target" data-worldbook-name="${escapeHtml(name)}"><span>${escapeHtml(name)}</span>${name === diagnosticsWorldbookName ? '<em>当前主世界书</em>' : ''}</button>`,
+          )
+          .join('')
+      : '<div class="th-worldbook-picker-empty">没有读到可复用的 worldbook；可以直接在上方输入新名称创建。</div>';
+    const moveCandidateHtml = uiState.managedWorldbookMoveCandidates.length
+      ? uiState.managedWorldbookMoveCandidates
+          .map(
+            candidate => `
+              <label class="th-worldbook-move-item">
+                <input type="checkbox" data-role="managed-worldbook-move-candidate" value="${escapeHtml(candidate.id)}" ${candidate.selectedByDefault ? 'checked' : ''} />
+                <span>
+                  <b>${escapeHtml(candidate.label)}</b>
+                  <small>${escapeHtml(candidate.sourceWorldbookName)} / ${escapeHtml(candidate.entryName)}</small>
+                </span>
+              </label>
+            `,
+          )
+          .join('')
+      : '<div class="th-worldbook-picker-empty">没有从当前打开来源里找到可搬运的索引/正文条目；仍可只搬运基础规则。</div>';
+    const warningHtml = uiState.managedWorldbookMoveWarnings.length
+      ? `<div class="th-worldbook-picker-meta">读取提示：${escapeHtml(uiState.managedWorldbookMoveWarnings.slice(-2).join('；'))}</div>`
+      : '';
+    title = '搬运到其他 worldbook';
+    description =
+      '先选目标 worldbook，再勾选要搬运的条目。列表来自当前运行时索引引用到的世界书条目，并包含基础规则与当前日历内容展示。';
+    bodyHtml = `
+      <div class="th-worldbook-export-panel">
+        <label class="th-worldbook-export-field">
+          <span>目标 worldbook</span>
+          <input type="text" data-role="managed-worldbook-export-target" value="${escapeHtml(suggestedName)}" placeholder="搜索或输入 worldbook 名称" autocomplete="off" />
+        </label>
+        <div class="th-worldbook-picker-meta">当前后端目标：${escapeHtml(diagnosticsWorldbookName || '（未绑定）')}；目标可以是已有 worldbook 或新名称。</div>
+        <div class="th-worldbook-picker-list" data-role="managed-worldbook-export-list">${worldbookListHtml}</div>
+        <div class="th-worldbook-move-panel">
+          <div class="th-worldbook-move-head">
+            <span>搬运内容</span>
+            <span>
+              <button type="button" class="th-text-btn" data-action="managed-worldbook-select-all-move-candidates">全选</button>
+              <button type="button" class="th-text-btn" data-action="managed-worldbook-clear-move-candidates">全不选</button>
+            </span>
+          </div>
+          <div class="th-worldbook-move-list">${moveCandidateHtml}</div>
+          <label class="th-worldbook-move-option">
+            <input type="checkbox" data-role="managed-worldbook-remove-source" checked />
+            <span>搬运后从原来源删除已选索引/正文条目，避免多个打开 worldbook 重复注入；脚本内置基础规则不会删除。</span>
+          </label>
+        </div>
+        ${warningHtml}
+      </div>
+    `;
+    actionHtml = [
+      '<div class="th-managed-worldbook-action-row is-primary">',
+      '<button type="button" class="th-btn th-primary-btn th-managed-worldbook-dialog-btn" data-action="managed-worldbook-confirm-export-external">搬运 / 创建</button>',
+      '<button type="button" class="th-btn th-managed-worldbook-dialog-btn" data-action="managed-worldbook-dialog-return">取消</button>',
+      '</div>',
     ].join('');
   }
 
-  layer.dataset.open = 'true';
-  layer.setAttribute('aria-hidden', 'false');
   layer.innerHTML = `
     <div class="th-managed-worldbook-dialog-backdrop"></div>
     <section class="th-managed-worldbook-dialog" role="dialog" aria-modal="true" aria-label="${escapeHtml(title)}">
@@ -507,9 +805,12 @@ function renderManagedWorldbookDialog(): void {
         <div class="th-managed-worldbook-dialog-desc">${escapeHtml(description)}</div>
       </div>
       <ul class="th-managed-worldbook-dialog-summary">${summaryHtml}</ul>
+      ${uiState.managedWorldbookDialogMode === 'menu' ? `<div class="th-managed-source-board">${sourceHtml}</div>` : ''}
+      ${bodyHtml}
       <div class="th-managed-worldbook-dialog-actions">${actionHtml}</div>
     </section>
   `;
+  syncDialogLayerOpen(layer, true);
 
   const bindClick = (selector: string, handler: () => void) => {
     const element = layer.querySelector<HTMLElement>(selector);
@@ -529,7 +830,7 @@ function renderManagedWorldbookDialog(): void {
     openManagedWorldbookDialog('confirm-reinstall', diagnostics);
   });
   bindClick('[data-action="managed-worldbook-menu-export-external"]', () => {
-    void promptExternalManagedWorldbookInstall();
+    void openExternalWorldbookMoveDialog(diagnostics);
   });
   bindClick('[data-action="managed-worldbook-confirm-uninstall"]', () => {
     void confirmManagedWorldbookUninstall();
@@ -537,11 +838,156 @@ function renderManagedWorldbookDialog(): void {
   bindClick('[data-action="managed-worldbook-confirm-reinstall"]', () => {
     void confirmManagedWorldbookReinstall();
   });
+  bindClick('[data-action="managed-worldbook-confirm-export-external"]', () => {
+    void confirmExternalManagedWorldbookInstall(layer);
+  });
+  bindClick('[data-action="managed-worldbook-select-all-move-candidates"]', () => {
+    setExternalWorldbookMoveCandidateChecks(layer, true);
+  });
+  bindClick('[data-action="managed-worldbook-clear-move-candidates"]', () => {
+    setExternalWorldbookMoveCandidateChecks(layer, false);
+  });
+
+  const exportTargetInput = layer.querySelector<HTMLInputElement>('[data-role="managed-worldbook-export-target"]');
+  const exportList = layer.querySelector<HTMLElement>('[data-role="managed-worldbook-export-list"]');
+  if (exportTargetInput && exportList) {
+    exportTargetInput.oninput = () => {
+      filterExternalWorldbookPicker(layer);
+    };
+    exportList.querySelectorAll<HTMLElement>('[data-action="managed-worldbook-pick-export-target"]').forEach(button => {
+      button.onclick = () => {
+        exportTargetInput.value = String(button.getAttribute('data-worldbook-name') || '').trim();
+        filterExternalWorldbookPicker(layer);
+        exportTargetInput.focus();
+      };
+    });
+    filterExternalWorldbookPicker(layer);
+  }
+}
+
+function getKnownTagLabels(): string[] {
+  const archive = readArchiveStore();
+  const values = [
+    ...(state.dataset?.suggestions.tagCandidates.map(option => option.label) ?? []),
+    ...archive.policy.customTags,
+    ...Object.keys(archive.policy.tagColors),
+  ];
+  return values
+    .map(tag => String(tag || '').trim())
+    .filter(Boolean)
+    .filter((tag, index, array) => array.indexOf(tag) === index)
+    .sort((left, right) => left.localeCompare(right, 'zh-CN'));
+}
+
+function rememberCustomTags(tags: string[]): void {
+  const normalized = tags
+    .map(tag => String(tag || '').trim())
+    .filter(Boolean)
+    .filter((tag, index, array) => array.indexOf(tag) === index);
+  if (!normalized.length) {
+    return;
+  }
+  const policy = readArchiveStore().policy;
+  const nextTags = [...policy.customTags, ...normalized].filter((tag, index, array) => array.indexOf(tag) === index);
+  replaceCalendarArchivePolicy({ customTags: nextTags });
+}
+
+function closeTagColorDialog(): void {
+  uiState.tagColorDialogOpen = false;
+  renderShell();
+}
+
+function openTagColorDialog(): void {
+  uiState.tagColorDialogOpen = true;
+  uiState.selectedTagColorTag = uiState.selectedTagColorTag || getKnownTagLabels()[0] || '主线';
+  uiState.tagColorFeedback = '';
+  renderShell();
+}
+
+function renderTagColorDialog(): void {
+  if (!refs.root) {
+    return;
+  }
+  const layer = refs.root.querySelector<HTMLElement>('[data-role="tag-color-dialog-layer"]');
+  if (!layer) {
+    return;
+  }
+  if (!uiState.tagColorDialogOpen) {
+    syncDialogLayerOpen(layer, false);
+    layer.innerHTML = '';
+    return;
+  }
+
+  const policy = readArchiveStore().policy;
+  const knownTags = getKnownTagLabels();
+  const selectedTag = knownTags.includes(uiState.selectedTagColorTag)
+    ? uiState.selectedTagColorTag
+    : knownTags[0] || '主线';
+  uiState.selectedTagColorTag = selectedTag;
+  const selectedColor = policy.tagColors[selectedTag] ?? TAG_COLOR_PALETTE[0];
+  const contrastRatio = getContrastRatio(selectedColor.background, selectedColor.text);
+  const contrastWarning =
+    contrastRatio !== null && contrastRatio < 4.5
+      ? '<div class="th-tag-color-warning">当前背景色和文字色对比偏低，手机屏幕上可能不清楚。</div>'
+      : '';
+  const feedbackHtml = uiState.tagColorFeedback
+    ? `<div class="th-tag-color-feedback">${escapeHtml(uiState.tagColorFeedback)}</div>`
+    : '';
+  const tagButtons = knownTags
+    .map(
+      tag =>
+        `<button type="button" class="th-tag-color-tag ${tag === selectedTag ? 'is-active' : ''}" data-action="select-tag-color" data-tag-value="${escapeHtml(tag)}">${escapeHtml(tag)}</button>`,
+    )
+    .join('');
+  const paletteButtons = TAG_COLOR_PALETTE.map(
+    color =>
+      `<button type="button" class="th-color-swatch" data-action="apply-tag-color-palette" data-background="${escapeHtml(color.background)}" data-text="${escapeHtml(color.text)}" data-border="${escapeHtml(color.border || color.background)}" style="--th-swatch-bg: ${escapeHtml(color.background)}; --th-swatch-text: ${escapeHtml(color.text)}; --th-swatch-border: ${escapeHtml(color.border || color.background)};" title="${escapeHtml(color.name)}"><span>${escapeHtml(color.name)}</span></button>`,
+  ).join('');
+
+  layer.innerHTML = `
+    <div class="th-managed-worldbook-dialog-backdrop" data-action="close-tag-color-panel"></div>
+    <section class="th-managed-worldbook-dialog th-tag-color-dialog" role="dialog" aria-modal="true" aria-label="标签颜色">
+      <div class="th-managed-worldbook-dialog-head">
+        <div class="th-managed-worldbook-dialog-title">标签颜色</div>
+        <div class="th-managed-worldbook-dialog-desc">选择标签后点色板即可保存；需要精细调整时再改 hex。</div>
+      </div>
+      ${feedbackHtml}
+      <div class="th-tag-color-toolbar">
+        <input type="text" data-action="tag-color-search-input" placeholder="搜索标签，或输入新标签" />
+        <button type="button" class="th-btn" data-action="add-color-tag">新增标签</button>
+      </div>
+      <div class="th-tag-color-body">
+        <div class="th-tag-color-tag-list" data-role="tag-color-tag-list">${tagButtons}</div>
+        <div class="th-tag-color-editor">
+          <div class="th-tag-color-current">
+            <span class="th-tag-color-preview" style="--th-chip-bg: ${escapeHtml(selectedColor.background)}; --th-chip-text: ${escapeHtml(selectedColor.text)}; --th-chip-border: ${escapeHtml(selectedColor.border || selectedColor.background)};">${escapeHtml(selectedTag)}</span>
+          </div>
+          ${contrastWarning}
+          <div class="th-color-palette">${paletteButtons}</div>
+          <div class="th-color-hex-grid">
+            <label>背景 hex<input data-tag-color-field="background" value="${escapeHtml(selectedColor.background)}" placeholder="#dcecff" /></label>
+            <label>文字 hex<input data-tag-color-field="text" value="${escapeHtml(selectedColor.text)}" placeholder="#305d97" /></label>
+            <label>边框 hex<input data-tag-color-field="border" value="${escapeHtml(selectedColor.border || selectedColor.background)}" placeholder="#a8c7ed" /></label>
+          </div>
+        </div>
+      </div>
+      <div class="th-managed-worldbook-dialog-actions">
+        <button type="button" class="th-btn is-danger" data-action="reset-tag-color">移除颜色</button>
+        <button type="button" class="th-btn th-primary-btn" data-action="save-tag-color-hex">保存 hex</button>
+        <button type="button" class="th-btn" data-action="close-tag-color-panel">关闭</button>
+      </div>
+    </section>
+  `;
+  syncDialogLayerOpen(layer, true);
 }
 
 function switchSidebarTab(tab: SidebarTab): void {
   uiState.sidebarTab = tab;
   if (uiState.sidebarTab === 'form' && !state.editingEventId) {
+    state.formMode = 'create';
+  }
+  if (uiState.sidebarTab !== 'form') {
+    state.editingEventId = null;
     state.formMode = 'create';
   }
   if (refs.root) {
@@ -557,6 +1003,8 @@ function switchSidebarTab(tab: SidebarTab): void {
   }
   if (uiState.sidebarTab === 'form') {
     renderFormSection();
+  } else {
+    renderShell();
   }
 }
 
@@ -595,17 +1043,282 @@ function readFormValue(field: string): string {
   ).trim();
 }
 
+function readFormTags(): string[] {
+  return parseTagListInput(readFormValue('tags'));
+}
+
+function ensureFormTagOption(tag: string): void {
+  const list = refs.formPanel?.querySelector<HTMLElement>('[data-role="tag-option-list"]');
+  if (!list) {
+    return;
+  }
+  const exists = Array.from(list.querySelectorAll<HTMLElement>('[data-action="toggle-form-tag"]')).some(
+    button => String(button.getAttribute('data-tag-value') || '') === tag,
+  );
+  if (exists) {
+    return;
+  }
+  const button = hostDocument.createElement('button');
+  button.type = 'button';
+  button.className = 'th-tag-option';
+  button.dataset.action = 'toggle-form-tag';
+  button.dataset.tagValue = tag;
+  button.textContent = tag;
+  list.appendChild(button);
+}
+
+function writeFormTags(tags: string[]): void {
+  const normalized = tags
+    .map(tag => String(tag || '').trim())
+    .filter(Boolean)
+    .filter((tag, index, array) => array.indexOf(tag) === index);
+  const hidden = refs.formPanel?.querySelector<HTMLInputElement>('[data-form-field="tags"]');
+  if (hidden) {
+    hidden.value = normalized.join(', ');
+  }
+  const selectedList = refs.formPanel?.querySelector<HTMLElement>('[data-role="selected-tag-list"]');
+  if (selectedList) {
+    selectedList.innerHTML = normalized.length
+      ? normalized
+          .map(
+            tag =>
+              `<button type="button" class="th-form-tag-chip" data-action="remove-form-tag" data-tag-value="${escapeHtml(tag)}">${escapeHtml(tag)} ×</button>`,
+          )
+          .join('')
+      : '<span class="th-tag-picker-empty">未选择标签</span>';
+  }
+  refs.formPanel?.querySelectorAll<HTMLElement>('[data-action="toggle-form-tag"]').forEach(button => {
+    const tag = String(button.getAttribute('data-tag-value') || '').trim();
+    const active = normalized.includes(tag);
+    button.classList.toggle('is-active', active);
+    button.setAttribute('aria-pressed', active ? 'true' : 'false');
+  });
+}
+
+function filterFormTagOptions(keyword: string): void {
+  const normalized = keyword.trim().toLowerCase();
+  refs.formPanel?.querySelectorAll<HTMLElement>('[data-action="toggle-form-tag"]').forEach(button => {
+    const tag = String(button.getAttribute('data-tag-value') || '').toLowerCase();
+    button.hidden = Boolean(normalized && !tag.includes(normalized));
+  });
+}
+
+function toggleFormTag(tag: string): void {
+  const current = readFormTags();
+  writeFormTags(current.includes(tag) ? current.filter(item => item !== tag) : [...current, tag]);
+}
+
+function addCustomFormTag(): void {
+  const input = refs.formPanel?.querySelector<HTMLInputElement>('[data-action="tag-search-input"]');
+  const tags = parseTagListInput(input?.value || '');
+  if (!tags.length) {
+    return;
+  }
+  tags.forEach(ensureFormTagOption);
+  writeFormTags([...readFormTags(), ...tags]);
+  rememberCustomTags(tags);
+  if (input) {
+    input.value = '';
+  }
+  filterFormTagOptions('');
+}
+
+function getPolicyTagPicker(field: string): HTMLElement | null {
+  return (
+    refs.detailPanel?.querySelector<HTMLElement>(`[data-role="policy-tag-picker"][data-policy-tag-field="${field}"]`) ??
+    null
+  );
+}
+
+function readPolicyTags(field: string): string[] {
+  const picker = getPolicyTagPicker(field);
+  return parseTagListInput(
+    String(picker?.querySelector<HTMLInputElement>(`[data-policy-field="${field}"]`)?.value || ''),
+  );
+}
+
+function ensurePolicyTagOption(field: string, tag: string): void {
+  const picker = getPolicyTagPicker(field);
+  const list = picker?.querySelector<HTMLElement>('[data-role="policy-tag-option-list"]');
+  if (!list) {
+    return;
+  }
+  const exists = Array.from(list.querySelectorAll<HTMLElement>('[data-action="toggle-policy-tag"]')).some(
+    button => String(button.getAttribute('data-tag-value') || '') === tag,
+  );
+  if (exists) {
+    return;
+  }
+  const button = hostDocument.createElement('button');
+  button.type = 'button';
+  button.className = 'th-tag-option';
+  button.dataset.action = 'toggle-policy-tag';
+  button.dataset.policyTagField = field;
+  button.dataset.tagValue = tag;
+  button.setAttribute('aria-pressed', 'false');
+  button.innerHTML = `<span class="th-tag-option-check" aria-hidden="true"></span><span>${escapeHtml(tag)}</span>`;
+  list.appendChild(button);
+}
+
+function sortPolicyTagOptionButtons(picker: HTMLElement | null, selectedTags: string[], keyword = ''): void {
+  const list = picker?.querySelector<HTMLElement>('[data-role="policy-tag-option-list"]');
+  if (!list) {
+    return;
+  }
+  const normalizedKeyword = keyword.trim().toLowerCase();
+  const buttons = Array.from(list.querySelectorAll<HTMLElement>('[data-action="toggle-policy-tag"]'));
+  buttons
+    .sort((left, right) => {
+      const leftTag = String(left.getAttribute('data-tag-value') || '').trim();
+      const rightTag = String(right.getAttribute('data-tag-value') || '').trim();
+      const selectedRank = Number(selectedTags.includes(rightTag)) - Number(selectedTags.includes(leftTag));
+      return selectedRank || leftTag.localeCompare(rightTag, 'zh-CN');
+    })
+    .forEach(button => {
+      const tag = String(button.getAttribute('data-tag-value') || '').trim();
+      button.hidden = Boolean(normalizedKeyword && !tag.toLowerCase().includes(normalizedKeyword));
+      list.appendChild(button);
+    });
+  const empty = list.querySelector<HTMLElement>('[data-role="policy-tag-empty"]');
+  if (empty) {
+    empty.hidden = buttons.some(button => !button.hidden);
+  }
+}
+
+function writePolicyTags(field: string, tags: string[]): void {
+  const picker = getPolicyTagPicker(field);
+  const normalized = tags
+    .map(tag => String(tag || '').trim())
+    .filter(Boolean)
+    .filter((tag, index, array) => array.indexOf(tag) === index);
+  const hidden = picker?.querySelector<HTMLInputElement>(`[data-policy-field="${field}"]`);
+  if (hidden) {
+    hidden.value = normalized.join(', ');
+  }
+  const meta = picker?.querySelector<HTMLElement>('.th-policy-tag-meta');
+  if (meta) {
+    meta.textContent = `已选 ${normalized.length} 个；展开列表可直接勾选`;
+  }
+  picker?.querySelectorAll<HTMLElement>('[data-action="toggle-policy-tag"]').forEach(button => {
+    const tag = String(button.getAttribute('data-tag-value') || '').trim();
+    const active = normalized.includes(tag);
+    button.classList.toggle('is-active', active);
+    button.setAttribute('aria-pressed', active ? 'true' : 'false');
+    const check = button.querySelector<HTMLElement>('.th-tag-option-check');
+    if (check) {
+      check.textContent = active ? '✓' : '';
+    }
+  });
+  const keyword = String(
+    picker?.querySelector<HTMLInputElement>('[data-action="policy-tag-search-input"]')?.value || '',
+  );
+  sortPolicyTagOptionButtons(picker ?? null, normalized, keyword);
+}
+
+function filterPolicyTagOptions(field: string, keyword: string): void {
+  const picker = getPolicyTagPicker(field);
+  const selected = readPolicyTags(field);
+  sortPolicyTagOptionButtons(picker, selected, keyword);
+  const list = picker?.querySelector<HTMLElement>('[data-role="policy-tag-option-list"]');
+  const arrow = picker?.querySelector<HTMLElement>('[data-action="toggle-policy-tag-list"]');
+  if (keyword.trim() && list) {
+    list.hidden = false;
+    arrow?.setAttribute('aria-expanded', 'true');
+    arrow?.classList.add('is-open');
+  }
+}
+
+function togglePolicyTagList(field: string): void {
+  const picker = getPolicyTagPicker(field);
+  const list = picker?.querySelector<HTMLElement>('[data-role="policy-tag-option-list"]');
+  const arrow = picker?.querySelector<HTMLElement>('[data-action="toggle-policy-tag-list"]');
+  if (!list) {
+    return;
+  }
+  const open = list.hidden === true;
+  list.hidden = !open;
+  arrow?.setAttribute('aria-expanded', open ? 'true' : 'false');
+  arrow?.classList.toggle('is-open', open);
+  sortPolicyTagOptionButtons(
+    picker,
+    readPolicyTags(field),
+    String(picker?.querySelector<HTMLInputElement>('[data-action="policy-tag-search-input"]')?.value || ''),
+  );
+}
+
+function togglePolicyTag(field: string, tag: string): void {
+  const current = readPolicyTags(field);
+  writePolicyTags(field, current.includes(tag) ? current.filter(item => item !== tag) : [...current, tag]);
+}
+
+function addPolicyTag(field: string): void {
+  const picker = getPolicyTagPicker(field);
+  const input = picker?.querySelector<HTMLInputElement>('[data-action="policy-tag-search-input"]');
+  const tags = parseTagListInput(input?.value || '');
+  if (!tags.length) {
+    return;
+  }
+  tags.forEach(tag => ensurePolicyTagOption(field, tag));
+  writePolicyTags(field, [...readPolicyTags(field), ...tags]);
+  rememberCustomTags(tags);
+  if (input) {
+    input.value = '';
+  }
+  filterPolicyTagOptions(field, '');
+  const list = picker?.querySelector<HTMLElement>('[data-role="policy-tag-option-list"]');
+  const arrow = picker?.querySelector<HTMLElement>('[data-action="toggle-policy-tag-list"]');
+  if (list) {
+    list.hidden = false;
+    arrow?.setAttribute('aria-expanded', 'true');
+    arrow?.classList.add('is-open');
+  }
+}
+
+function normalizeEventIdSeed(value: string): string {
+  const ascii = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 36);
+  return ascii || 'event';
+}
+
+function generateEventId(title: string): string {
+  const knownIds = new Set<string>([
+    ...(state.dataset?.suggestions.idCandidates ?? []),
+    ...Object.keys(readArchiveStore().completed),
+  ]);
+  const base = normalizeEventIdSeed(title);
+  let candidate = base;
+  let index = 1;
+  while (knownIds.has(candidate)) {
+    index += 1;
+    candidate = `${base}_${index}`;
+  }
+  return candidate;
+}
+
+function getCurrentMonthAlias(): string {
+  return String(monthAliases.find(item => item.month === state.currentMonth.month)?.label || '').trim();
+}
+
 function renderMonthView(cells: MonthDayCell[]): string {
   return renderCalendarMonthView({
     cells,
     currentMonth: {
       year: state.currentMonth.year,
       month: state.currentMonth.month,
+      alias: getCurrentMonthAlias(),
     },
   });
 }
 
 function renderBookMainView(bookId: string): string {
+  if (isElliaBetaTicketBookId(bookId)) {
+    return renderElliaBetaTicketBookView(bookId);
+  }
+
   return renderBookMainViewExternal({
     book: state.dataset?.books[bookId] ?? null,
     currentPageIndex: uiState.openedBookPageIndex,
@@ -645,9 +1358,11 @@ function renderDetailPanel(selectedLabel: string, selectedItems: DailyAgendaItem
   }
 
   const openedBook = uiState.openedBookId ? (state.dataset.books[uiState.openedBookId] ?? null) : null;
-  if (uiState.openedBookId && !openedBook) {
+  if (uiState.openedBookId && !openedBook && !isElliaBetaTicketBookId(uiState.openedBookId)) {
     uiState.openedBookId = null;
   }
+
+  const addonHtml = state.selectedDateKey ? renderElliaTicketAddOnForDate(state.selectedDateKey) : '';
 
   return renderDetailPanelExternal({
     selectedLabel,
@@ -657,6 +1372,19 @@ function renderDetailPanel(selectedLabel: string, selectedItems: DailyAgendaItem
     booksById: state.dataset.books,
     editingEventId: state.editingEventId,
     renderMarkdownContent,
+    addonHtml,
+  });
+}
+
+function renderArchivePanel(): string {
+  if (!state.dataset) {
+    return '<div class="th-empty">数据加载中…</div>';
+  }
+  return renderArchivePanelExternal({
+    archivedEvents: state.dataset.archivedEvents,
+    filterKeyword: state.filterKeyword,
+    policy: readArchiveStore().policy,
+    tagCandidates: getKnownTagLabels(),
   });
 }
 
@@ -690,6 +1418,32 @@ function renderFormSection(): void {
   })}`;
 }
 
+function scrollActiveBookPageTabIntoView(): void {
+  if (!refs.root || !uiState.openedBookId) {
+    return;
+  }
+  hostWindow.requestAnimationFrame(() => {
+    const tabList = refs.root?.querySelector<HTMLElement>('.th-book-page-tabs');
+    const activeTab = tabList?.querySelector<HTMLElement>('.th-book-page-tab.is-active');
+    if (!tabList || !activeTab) {
+      return;
+    }
+
+    const currentLeft = tabList.scrollLeft;
+    const tabCenter = activeTab.offsetLeft + activeTab.offsetWidth / 2;
+    const nextLeft = Math.max(0, Math.round(tabCenter - tabList.clientWidth / 2));
+    if (Math.abs(currentLeft - nextLeft) < 2) {
+      return;
+    }
+
+    try {
+      tabList.scrollTo({ left: nextLeft, behavior: 'smooth' });
+    } catch {
+      tabList.scrollLeft = nextLeft;
+    }
+  });
+}
+
 function renderShell(): void {
   if (!refs.root || !refs.monthGrid || !refs.detailPanel || !refs.formPanel) {
     return;
@@ -700,9 +1454,13 @@ function renderShell(): void {
   refs.root.dataset.tab = uiState.sidebarTab;
   refs.root.dataset.readingBook = uiState.openedBookId ? 'true' : 'false';
   refs.root.dataset.mobileSideOpen = !isDesktopMode() && uiState.mobileSideOpen ? 'true' : 'false';
+  refs.root.dataset.tagColorOpen = uiState.tagColorDialogOpen ? 'true' : 'false';
+  refs.root.dataset.ballDragging = uiState.ballDragging ? 'true' : 'false';
+  applyBallPosition();
   applyTheme();
   updateManagedWorldbookButton();
   renderManagedWorldbookDialog();
+  renderTagColorDialog();
   refs.root.querySelectorAll<HTMLElement>('[data-action="switch-tab"]').forEach(button => {
     const tab = button.getAttribute('data-tab') || '';
     button.classList.toggle('is-active', tab === refs.root?.dataset.tab);
@@ -725,6 +1483,34 @@ function renderShell(): void {
     selectedDateKey: state.selectedDateKey,
     dataset: state.dataset,
   });
+  const elliaTicketEvents = buildElliaBetaTicketCalendarEventsForMonth(cells.map(cell => cell.key));
+  if (elliaTicketEvents.length) {
+    const cellsByKey = new Map(cells.map(cell => [cell.key, cell]));
+    elliaTicketEvents.forEach(event => {
+      const dateKey = event.range ? formatDateKey(event.range.start) : '';
+      const cell = cellsByKey.get(dateKey);
+      if (!cell) {
+        return;
+      }
+      const previousChipCount = cell.chips.length + cell.overflowCount;
+      cell.chips = [
+        {
+          id: event.id,
+          title: event.title,
+          row: 0,
+          startOffset: 0,
+          endOffset: 0,
+          isStart: true,
+          isEnd: true,
+          source: event.source,
+          colorToken: 'user' as const,
+          color: event.color,
+        },
+        ...cell.chips,
+      ].slice(0, 3);
+      cell.overflowCount = Math.max(0, previousChipCount + 1 - cell.chips.length);
+    });
+  }
   const monthAgendaGroups = getCurrentMonthAgendaGroups();
   const selectedAgendaGroups = state.selectedDateKey ? buildDailyAgenda(state.dataset, state.selectedDateKey, 1) : [];
   const detail = buildSelectedDayDetail({
@@ -736,31 +1522,37 @@ function renderShell(): void {
 
   refs.monthGrid.innerHTML = uiState.openedBookId ? renderBookMainView(uiState.openedBookId) : renderMonthView(cells);
   refs.detailPanel.innerHTML =
-    !state.selectedDateKey && isDesktopMode()
-      ? renderAgendaPanel(monthAgendaGroups)
-      : renderDetailPanel(selectedLabel, detail.agenda?.items ?? []);
+    uiState.sidebarTab === 'archive'
+      ? renderArchivePanel()
+      : !state.selectedDateKey && isDesktopMode()
+        ? renderAgendaPanel(monthAgendaGroups)
+        : renderDetailPanel(selectedLabel, detail.agenda?.items ?? []);
   const sideTitle = refs.root.querySelector<HTMLElement>('.th-side-title');
   if (sideTitle) {
     sideTitle.textContent =
-      uiState.sidebarTab === 'form'
-        ? state.editingEventId
-          ? '编辑事件'
-          : '新增事件'
-        : !state.selectedDateKey && isDesktopMode()
-          ? `${state.currentMonth.month}月事件`
-          : selectedLabel || '日期详情';
+      uiState.sidebarTab === 'archive'
+        ? '归档与规则'
+        : uiState.sidebarTab === 'form'
+          ? state.editingEventId
+            ? '编辑事件'
+            : '新增事件'
+          : !state.selectedDateKey && isDesktopMode()
+            ? `${state.currentMonth.month}月事件`
+            : selectedLabel || '日期详情';
   }
   if (uiState.sidebarTab === 'form') {
     renderFormSection();
   } else {
     refs.formPanel.innerHTML = '';
   }
+  scrollActiveBookPageTabIntoView();
   applyPanelPosition();
 }
 
 async function refreshDataset(): Promise<void> {
-  await syncArchiveOnActiveRemoval(readCurrentWorldTime().text || '');
   const dataset = await loadCalendarDatasetFromRuntimeWorldbook();
+  await syncArchiveOnActiveRemoval(dataset.nowText || '');
+  monthAliases = dataset.monthAliases ?? [];
   state.dataset = dataset;
   state.reminder = buildReminderState(dataset);
   syncStateAnchors();
@@ -774,6 +1566,7 @@ function setOpen(open: boolean): void {
     uiState.managedWorldbookDialogOpen = false;
     uiState.managedWorldbookDialogMode = null;
     uiState.managedWorldbookDialogDiagnostics = null;
+    uiState.tagColorDialogOpen = false;
   }
   renderShell();
   if (open) {
@@ -798,10 +1591,12 @@ function startEditForm(eventId: string): void {
 
 async function saveForm(): Promise<void> {
   const editing = getEditingRecord();
+  const title = readFormValue('title');
+  const id = readFormValue('id') || editing?.id || generateEventId(title);
   const result = await saveCalendarForm({
     type: readFormValue('type') === '重复' ? '重复' : '临时',
-    id: readFormValue('id'),
-    title: readFormValue('title'),
+    id,
+    title,
     tags: readFormValue('tags')
       .split(/[，,]/)
       .map(value => value.trim())
@@ -829,16 +1624,15 @@ async function deleteEvent(eventId: string): Promise<void> {
   if (!active) {
     return;
   }
-  const ok = hostWindow.confirm(`确认删除事件「${active.title}」吗？`);
+  const ok = hostWindow.confirm(`确认移除事件「${active.title}」吗？\n普通事件会进入归档区；黑名单标签会直接清理。`);
   if (!ok) {
     return;
   }
-  const buckets = await readActiveBuckets();
-  const temp = { ...buckets.临时 };
-  const repeat = { ...buckets.重复 };
-  delete temp[eventId];
-  delete repeat[eventId];
-  await replaceActiveBuckets({ 临时: temp, 重复: repeat });
+  const result = await removeActiveEventWithPolicy({ id: eventId, completedAt: state.dataset?.nowText || '' });
+  if (result === 'protected') {
+    hostWindow.alert('这个事件带有收藏标签，规则已阻止删除。');
+    return;
+  }
   await refreshDataset();
 }
 
@@ -851,8 +1645,123 @@ async function purgeArchived(eventId: string): Promise<void> {
   if (!ok) {
     return;
   }
-  delete archive.completed[eventId];
-  replaceArchiveStore(archive);
+  const result = purgeArchivedEventWithPolicy(eventId);
+  if (result === 'protected') {
+    hostWindow.alert('这个归档事件带有收藏标签，规则已阻止彻底删除。');
+    return;
+  }
+  await refreshDataset();
+}
+
+function parseTagListInput(value: string): string[] {
+  return String(value || '')
+    .split(/[，,\n]/)
+    .map(item => item.trim())
+    .filter(Boolean)
+    .filter((item, index, array) => array.indexOf(item) === index);
+}
+
+function readPolicyInputValue(name: string): string {
+  return String(
+    refs.detailPanel?.querySelector<HTMLInputElement | HTMLTextAreaElement>(`[data-policy-field="${name}"]`)?.value ||
+      '',
+  );
+}
+
+async function saveArchivePolicy(): Promise<void> {
+  const archiveOnActiveRemoval = Boolean(
+    refs.detailPanel?.querySelector<HTMLInputElement>('[data-policy-field="archive-on-active-removal"]')?.checked,
+  );
+  const nextPolicy: Partial<CalendarArchivePolicy> = {
+    archiveOnActiveRemoval,
+    autoDeleteTags: parseTagListInput(readPolicyInputValue('auto-delete-tags')),
+    protectedTags: parseTagListInput(readPolicyInputValue('protected-tags')),
+  };
+  replaceCalendarArchivePolicy(nextPolicy);
+  await refreshDataset();
+}
+
+function filterTagColorOptions(keyword: string): void {
+  const normalized = keyword.trim().toLowerCase();
+  refs.root?.querySelectorAll<HTMLElement>('[data-action="select-tag-color"]').forEach(button => {
+    const tag = String(button.getAttribute('data-tag-value') || '').toLowerCase();
+    button.hidden = Boolean(normalized && !tag.includes(normalized));
+  });
+}
+
+function addTagFromColorDialog(): void {
+  const input = refs.root?.querySelector<HTMLInputElement>('[data-action="tag-color-search-input"]');
+  const tags = parseTagListInput(input?.value || '');
+  if (!tags.length) {
+    return;
+  }
+  rememberCustomTags(tags);
+  uiState.selectedTagColorTag = tags[0];
+  if (input) {
+    input.value = '';
+  }
+  renderShell();
+}
+
+function selectTagColor(tag: string): void {
+  uiState.selectedTagColorTag = tag;
+  uiState.tagColorFeedback = '';
+  renderShell();
+}
+
+async function saveTagColor(color: CalendarEventColorStyle): Promise<void> {
+  const tag = uiState.selectedTagColorTag.trim();
+  if (!tag) {
+    return;
+  }
+  const policy = readArchiveStore().policy;
+  replaceCalendarArchivePolicy({
+    tagColors: {
+      ...policy.tagColors,
+      [tag]: color,
+    },
+  });
+  const ratio = getContrastRatio(color.background, color.text);
+  uiState.tagColorFeedback =
+    ratio !== null && ratio < 4.5 ? `已应用「${tag}」，但文字对比偏低。` : `已应用「${tag}」颜色。`;
+  await refreshDataset();
+}
+
+async function saveTagColorHex(): Promise<void> {
+  const readColorField = (name: string): string =>
+    String(refs.root?.querySelector<HTMLInputElement>(`[data-tag-color-field="${name}"]`)?.value || '').trim();
+  const background = readColorField('background');
+  const text = readColorField('text');
+  const border = readColorField('border');
+  if (!isValidHexColor(background) || !isValidHexColor(text) || (border && !isValidHexColor(border))) {
+    hostWindow.alert('请输入有效的 hex 颜色，例如 #dcecff。');
+    return;
+  }
+  await saveTagColor({ background, text, ...(border ? { border } : {}) });
+}
+
+async function resetSelectedTagColor(): Promise<void> {
+  const tag = uiState.selectedTagColorTag.trim();
+  if (!tag) {
+    return;
+  }
+  const policy = readArchiveStore().policy;
+  const nextColors = { ...policy.tagColors };
+  delete nextColors[tag];
+  replaceCalendarArchivePolicy({ tagColors: nextColors });
+  uiState.tagColorFeedback = `已移除「${tag}」的自定义颜色。`;
+  await refreshDataset();
+}
+
+async function purgeAutoDeleteArchive(): Promise<void> {
+  const ok = hostWindow.confirm('确认清理所有命中黑名单标签的归档事件吗？收藏标签仍会被保留。');
+  if (!ok) {
+    return;
+  }
+  const result = purgeAutoDeleteArchivedEvents();
+  hostWindow.alert(
+    `已清理 ${result.deleted} 条归档事件。${result.protected ? `\n收藏保护 ${result.protected} 条。` : ''}`,
+  );
   await refreshDataset();
 }
 
@@ -866,6 +1775,12 @@ async function fillNowTime(): Promise<void> {
 }
 
 async function handleManagedWorldbookClick(): Promise<void> {
+  try {
+    await refreshCalendarManagedWorldbookRuntimeDiagnostics();
+    await refreshCalendarManagedWorldbookSourceDiagnostics();
+  } catch (error) {
+    console.warn(`[${SCRIPT_NAME}] 刷新世界书 runtime 状态失败`, error);
+  }
   const diagnostics = getCalendarManagedWorldbookDiagnostics();
   console.info(`[${SCRIPT_NAME}] 用户点击 managed worldbook connectivity 按钮`, diagnostics);
   if (uiState.managedWorldbookBusy) {
@@ -875,58 +1790,117 @@ async function handleManagedWorldbookClick(): Promise<void> {
   openManagedWorldbookDialog('menu', diagnostics);
 }
 
-function buildExternalWorldbookPromptPayload(): {
-  message: string;
-  suggestedName: string;
-} {
-  const diagnostics = getCalendarManagedWorldbookDiagnostics();
-  const availableNames = getAvailableCalendarWorldbooks()
-    .map(name => String(name || '').trim())
-    .filter(Boolean);
-  const suggestedName = availableNames.find(name => name !== diagnostics.worldbookName) ?? `${SCRIPT_NAME}-backend`;
-  const listedNames =
-    availableNames.length > 0
-      ? availableNames
-          .slice(0, 12)
-          .map(name => `- ${name}`)
-          .join('\n')
-      : '（当前没有可复用的 worldbook，可直接输入新名称创建）';
-
-  return {
-    suggestedName,
-    message: [
-      '请输入外部 worldbook 名称。',
-      '可填写已有 worldbook 名称，或输入新名称自动创建。',
-      `当前主 worldbook：${diagnostics.worldbookName || '（未绑定）'}`,
-      '可用 worldbook：',
-      listedNames,
-    ].join('\n'),
-  };
-}
-
-async function promptExternalManagedWorldbookInstall(): Promise<void> {
+async function openExternalWorldbookMoveDialog(diagnostics: CalendarManagedWorldbookDiagnostics): Promise<void> {
   if (uiState.managedWorldbookBusy) {
     return;
   }
 
-  const { message, suggestedName } = buildExternalWorldbookPromptPayload();
-  const targetName = String(hostWindow.prompt(message, suggestedName) || '').trim();
-  if (!targetName) {
+  uiState.managedWorldbookBusy = true;
+  renderShell();
+  try {
+    const result = await listCalendarWorldbookMoveCandidates();
+    uiState.managedWorldbookMoveCandidates = result.candidates;
+    uiState.managedWorldbookMoveWarnings = result.warnings;
+    openManagedWorldbookDialog('export-external', diagnostics);
+  } catch (error) {
+    console.warn(`[${SCRIPT_NAME}] 读取可搬运 worldbook 条目失败`, error);
+    uiState.managedWorldbookMoveCandidates = [];
+    uiState.managedWorldbookMoveWarnings = [error instanceof Error ? error.message : String(error)];
+    openManagedWorldbookDialog('export-external', diagnostics);
+  } finally {
+    uiState.managedWorldbookBusy = false;
+    renderShell();
+  }
+}
+
+function readExternalWorldbookTargetName(layer: HTMLElement): string {
+  return String(
+    layer.querySelector<HTMLInputElement>('[data-role="managed-worldbook-export-target"]')?.value || '',
+  ).trim();
+}
+
+function filterExternalWorldbookPicker(layer: HTMLElement): void {
+  const keyword = readExternalWorldbookTargetName(layer).toLowerCase();
+  const buttons = Array.from(
+    layer.querySelectorAll<HTMLElement>('[data-action="managed-worldbook-pick-export-target"]'),
+  );
+  buttons.forEach(button => {
+    const name = String(button.getAttribute('data-worldbook-name') || '').trim();
+    const matched = !keyword || name.toLowerCase().includes(keyword);
+    button.hidden = !matched;
+    button.classList.toggle('is-selected', Boolean(name && name.toLowerCase() === keyword));
+  });
+
+  const hasVisibleButton = buttons.some(button => !button.hidden);
+  const list = layer.querySelector<HTMLElement>('[data-role="managed-worldbook-export-list"]');
+  const empty = list?.querySelector<HTMLElement>('[data-role="managed-worldbook-export-filter-empty"]');
+  if (!list) {
+    return;
+  }
+  if (!hasVisibleButton && buttons.length > 0 && !empty) {
+    list.insertAdjacentHTML(
+      'beforeend',
+      '<div class="th-worldbook-picker-empty" data-role="managed-worldbook-export-filter-empty">列表里没有匹配项；继续点击“导出 / 创建”会用当前输入创建新 worldbook。</div>',
+    );
+  } else if ((hasVisibleButton || buttons.length === 0) && empty) {
+    empty.remove();
+  }
+}
+
+function readExternalWorldbookMoveCandidateIds(layer: HTMLElement): string[] {
+  return Array.from(layer.querySelectorAll<HTMLInputElement>('[data-role="managed-worldbook-move-candidate"]'))
+    .filter(input => input.checked)
+    .map(input => String(input.value || '').trim())
+    .filter(Boolean);
+}
+
+function shouldRemoveExternalWorldbookMoveSources(layer: HTMLElement): boolean {
+  return Boolean(layer.querySelector<HTMLInputElement>('[data-role="managed-worldbook-remove-source"]')?.checked);
+}
+
+function setExternalWorldbookMoveCandidateChecks(layer: HTMLElement, checked: boolean): void {
+  layer.querySelectorAll<HTMLInputElement>('[data-role="managed-worldbook-move-candidate"]').forEach(input => {
+    input.checked = checked;
+  });
+}
+
+async function confirmExternalManagedWorldbookInstall(layer: HTMLElement): Promise<void> {
+  if (uiState.managedWorldbookBusy) {
     return;
   }
 
+  const targetName = readExternalWorldbookTargetName(layer);
+  if (!targetName) {
+    hostWindow.alert('请先选择或输入目标 worldbook 名称。');
+    return;
+  }
+
+  const candidateIds = readExternalWorldbookMoveCandidateIds(layer);
+  if (candidateIds.length === 0) {
+    hostWindow.alert('请至少勾选一个要搬运的条目。');
+    return;
+  }
+
+  const removeFromSource = shouldRemoveExternalWorldbookMoveSources(layer);
   uiState.managedWorldbookDialogOpen = false;
   uiState.managedWorldbookDialogMode = null;
   uiState.managedWorldbookDialogDiagnostics = null;
   uiState.managedWorldbookBusy = true;
   renderShell();
   try {
-    const result = await installCalendarManagedEntriesToExternalWorldbook(targetName);
-    console.info(`[${SCRIPT_NAME}] 已将 backend 条目写入外部 worldbook`, result);
-    hostWindow.alert(`已将 backend 条目写入外部 worldbook\nWorldbook: ${result.name}`);
+    const result = await installCalendarManagedEntriesToExternalWorldbook(targetName, {
+      candidateIds,
+      removeFromSource,
+    });
+    console.info(`[${SCRIPT_NAME}] 已搬运 worldbook 条目`, result);
+    hostWindow.alert(
+      `已搬运 ${result.movedCount ?? candidateIds.length} 个条目到 worldbook\nWorldbook: ${result.name}${
+        removeFromSource ? `\n已从原来源删除 ${result.removedSourceCount ?? 0} 个条目` : ''
+      }`,
+    );
   } catch (error) {
-    console.warn(`[${SCRIPT_NAME}] 写入外部 worldbook backend 条目失败`, error);
-    hostWindow.alert(`写入外部 worldbook 失败：${error instanceof Error ? error.message : String(error)}`);
+    console.warn(`[${SCRIPT_NAME}] 搬运 worldbook 条目失败`, error);
+    hostWindow.alert(`搬运 worldbook 条目失败：${error instanceof Error ? error.message : String(error)}`);
   } finally {
     uiState.managedWorldbookBusy = false;
     renderShell();
@@ -1043,19 +2017,78 @@ function handlePanelDragEnd(): void {
   uiState.dragging = false;
 }
 
+function handleBallDragStart(clientX: number, clientY: number): void {
+  if (!refs.ball || state.open) {
+    return;
+  }
+  const rect = refs.ball.getBoundingClientRect();
+  uiState.ballDragging = true;
+  uiState.ballMoved = false;
+  uiState.ballDragStartX = clientX;
+  uiState.ballDragStartY = clientY;
+  uiState.ballDragOriginLeft = rect.left;
+  uiState.ballDragOriginTop = rect.top;
+  refs.root?.setAttribute('data-ball-dragging', 'true');
+}
+
+function handleBallDragMove(clientX: number, clientY: number): void {
+  if (!uiState.ballDragging) {
+    return;
+  }
+  const deltaX = clientX - uiState.ballDragStartX;
+  const deltaY = clientY - uiState.ballDragStartY;
+  if (Math.hypot(deltaX, deltaY) > BALL_DRAG_CLICK_THRESHOLD) {
+    uiState.ballMoved = true;
+  }
+  const position = clampBallPosition(uiState.ballDragOriginLeft + deltaX, uiState.ballDragOriginTop + deltaY);
+  uiState.ballLeft = position.left;
+  uiState.ballTop = position.top;
+  applyBallPosition();
+}
+
+function handleBallDragEnd(): void {
+  if (!uiState.ballDragging) {
+    return;
+  }
+  uiState.ballDragging = false;
+  refs.root?.setAttribute('data-ball-dragging', 'false');
+  if (uiState.ballMoved) {
+    uiState.ballSuppressNextClick = true;
+    saveBallPosition();
+  }
+}
+
 function bindEvents(): void {
   bindCalendarWidgetEvents({
     refs,
     hostDocument,
     hostWindow,
     onToggleBall: () => {
+      if (uiState.ballSuppressNextClick) {
+        uiState.ballSuppressNextClick = false;
+        return;
+      }
+      if (!state.open) {
+        uiState.openedBookId = null;
+        uiState.openedBookPageIndex = 0;
+        switchSidebarTab('detail');
+      }
       setOpen(!state.open);
     },
+    onBallDragStart: handleBallDragStart,
+    onBallDragMove: handleBallDragMove,
+    onBallDragEnd: handleBallDragEnd,
     onClosePanel: () => {
+      uiState.openedBookId = null;
+      uiState.openedBookPageIndex = 0;
+      switchSidebarTab('detail');
+      renderShell();
       setOpen(false);
     },
     onReload: refreshDataset,
     onToggleTheme: toggleTheme,
+    onOpenTagColorPanel: openTagColorDialog,
+    onCloseTagColorPanel: closeTagColorDialog,
     onManagedWorldbookClick: handleManagedWorldbookClick,
     onSwitchTab: switchSidebarTab,
     onOpenCreateForm: startCreateForm,
@@ -1067,6 +2100,30 @@ function bindEvents(): void {
     },
     onFillNowTime: fillNowTime,
     onSaveForm: saveForm,
+    onTagSearchInput: filterFormTagOptions,
+    onToggleFormTag: toggleFormTag,
+    onRemoveFormTag: (tag: string) => {
+      writeFormTags(readFormTags().filter(item => item !== tag));
+    },
+    onAddCustomTag: addCustomFormTag,
+    onTagColorSearchInput: filterTagColorOptions,
+    onAddColorTag: addTagFromColorDialog,
+    onSelectTagColor: selectTagColor,
+    onApplyTagColorPalette: (color: CalendarEventColorStyle) => {
+      void saveTagColor(color);
+    },
+    onSaveTagColorHex: saveTagColorHex,
+    onResetTagColor: resetSelectedTagColor,
+    onPolicyTagSearchInput: filterPolicyTagOptions,
+    onTogglePolicyTag: togglePolicyTag,
+    onRemovePolicyTag: (field: string, tag: string) => {
+      writePolicyTags(
+        field,
+        readPolicyTags(field).filter(item => item !== tag),
+      );
+    },
+    onAddPolicyTag: addPolicyTag,
+    onTogglePolicyTagList: togglePolicyTagList,
     onPickDay: (dateKey: string) => {
       state.selectedDateKey = dateKey;
       state.editingEventId = null;
@@ -1113,7 +2170,7 @@ function bindEvents(): void {
     },
     onOpenBook: (bookId: string) => {
       const book = state.dataset?.books[bookId];
-      if (!book) {
+      if (!book && !isElliaBetaTicketBookId(bookId)) {
         return;
       }
       uiState.openedBookId = bookId;
@@ -1139,13 +2196,23 @@ function bindEvents(): void {
       renderShell();
     },
     onEditEvent: startEditForm,
-    onCompleteEvent: (eventId: string, eventType: '临时' | '重复') =>
-      archiveCompletedEvent({ id: eventId, type: eventType, completedAt: state.dataset?.nowText || '' }).then(
-        refreshDataset,
-      ),
+    onCompleteEvent: async (eventId: string, eventType: '临时' | '重复') => {
+      const result = await archiveCompletedEvent({
+        id: eventId,
+        type: eventType,
+        completedAt: state.dataset?.nowText || '',
+      });
+      if (result === 'protected') {
+        hostWindow.alert('这个事件带有收藏标签，规则已阻止完成后移出。');
+        return;
+      }
+      await refreshDataset();
+    },
     onDeleteEvent: deleteEvent,
     onRestoreEvent: (eventId: string) => restoreArchivedEvent(eventId).then(refreshDataset),
     onPurgeEvent: purgeArchived,
+    onSaveArchivePolicy: saveArchivePolicy,
+    onPurgeAutoDeleteArchive: purgeAutoDeleteArchive,
     onAgendaFilterInput: (keyword: string) => {
       state.filterKeyword = keyword;
       renderShell();
@@ -1172,6 +2239,7 @@ function bindEvents(): void {
     onPanelDragMove: handlePanelDragMove,
     onPanelDragEnd: handlePanelDragEnd,
     onWindowResize: () => {
+      applyBallPosition();
       if (!isDesktopMode()) {
         uiState.panelLeft = null;
         uiState.panelTop = null;
@@ -1199,6 +2267,7 @@ function destroy(reason?: string): void {
     refs.root.remove();
   }
   $(hostDocument).off('.calendar-float-panel-drag');
+  $(hostDocument).off('.calendar-float-ball-drag');
   $(hostWindow).off('.calendar-float-window');
   hostDocument.getElementById(STYLE_ID)?.remove();
   refs.root = null;
@@ -1221,6 +2290,12 @@ async function reload(): Promise<void> {
   await refreshDataset();
 }
 
+function setExternalHostMode(enabled: boolean): void {
+  if (refs.root) {
+    refs.root.dataset.externalHost = enabled ? 'true' : 'false';
+  }
+}
+
 export function bootstrapCalendarWidget(): void {
   hostWindow[INSTANCE_KEY]?.destroy('reload');
   ensureStyle();
@@ -1235,6 +2310,7 @@ export function bootstrapCalendarWidget(): void {
     open: () => setOpen(true),
     close: () => setOpen(false),
     reload,
+    setExternalHostMode,
   };
   if (window !== hostWindow) {
     window[INSTANCE_KEY] = hostWindow[INSTANCE_KEY];

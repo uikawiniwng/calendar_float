@@ -5,7 +5,7 @@
 import {
   findCalendarRuntimeEntryByReference,
   readCalendarRuntimeTextLibrary,
-  type readCalendarRuntimeWorldbookEntries,
+  readCalendarRuntimeWorldbookEntries,
 } from './runtime-worldbook-loader';
 import type { 日历世界书引用, 日历世界书来源条目, 日历文本库引用, 日历运行时内容节点 } from './runtime-worldbook-types';
 
@@ -127,8 +127,8 @@ export async function resolveCalendarRuntimeNodeText(args: {
     };
   }
 
-  const entries = args.preloaded?.条目 ?? [];
-  const result = resolveCalendarRuntimeEntryContentByReference(entries, node.条目);
+  const preloaded = args.preloaded ?? (await readCalendarRuntimeWorldbookEntries());
+  const result = resolveCalendarRuntimeEntryContentByReference(preloaded.条目, node.条目);
   return {
     正文: result.正文,
     来源条目名: result.来源条目名,

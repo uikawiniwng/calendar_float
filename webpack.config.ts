@@ -48,11 +48,16 @@ function common_path(lhs: string, rhs: string) {
   return lhs_parts.join(path.sep);
 }
 
+function is_bundle_only_entry(file: string): boolean {
+  const normalized = normalize_entry_path(file);
+  return normalized === 'src/dlc_ellia/index.ts';
+}
+
 function glob_script_files() {
   const results: string[] = [];
-  const script_files = ['src/**/index.ts', 'src/**/index.tsx', 'src/**/index.js', 'src/**/index.jsx'].flatMap(pattern =>
-    fs.globSync(pattern),
-  );
+  const script_files = ['src/**/index.ts', 'src/**/index.tsx', 'src/**/index.js', 'src/**/index.jsx']
+    .flatMap(pattern => fs.globSync(pattern))
+    .filter(file => !is_bundle_only_entry(file));
 
   script_files
     .filter(

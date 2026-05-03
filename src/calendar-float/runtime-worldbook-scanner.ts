@@ -28,6 +28,8 @@ let runtimeReminderUninject: (() => void) | null = null;
 let runtimeAbstractUninject: (() => void) | null = null;
 let generationHookBound = false;
 let chatChangedHookBound = false;
+let generationHookStop: (() => void) | null = null;
+let chatChangedHookStop: (() => void) | null = null;
 
 export interface 日历运行时扫描结果 {
   命中关键字: string[];
@@ -54,8 +56,8 @@ function 取唯一文本(values: string[]): string[] {
   return output;
 }
 
-function 读取触发上下文(): 日历运行时触发上下文 {
-  const worldTime = readCurrentWorldTime();
+function 读取触发上下文(index: 日历运行时索引): 日历运行时触发上下文 {
+  const worldTime = readCurrentWorldTime(index.默认设置?.mvu时间路径);
   const messages = readLatestCalendarTriggerMessages(2);
   return {
     当前日期: worldTime.point,
@@ -115,10 +117,15 @@ async function 扫描节庆提醒(
     }
 
     const reminder = await resolveCalendarFestivalReminder(festival, context);
-    if (reminder.状态 === '未开始') {
-      result.提醒未开始文本.push(reminder.正文);
-    } else if (reminder.状态 === '进行中') {
-      result.提醒进行中文本.push(reminder.正文);
+    if (reminder.状态 === '未开始' || reminder.状态 === '进行中') {
+      追加节点关键字(result.命中关键字, festival.提醒);
+      if (festival.提醒?.输出?.模式 !== 'silent_scan') {
+        if (reminder.状态 === '未开始') {
+          result.提醒未开始文本.push(reminder.正文);
+        } else {
+          result.提醒进行中文本.push(reminder.正文);
+        }
+      }
     }
     result.警告.push(...reminder.警告.map(message => `[节庆提醒:${festival.名称}] ${message}`));
   }
@@ -189,6 +196,18 @@ function clearRuntimePrompts(): void {
   lastInjectedScanContent = '';
   lastInjectedReminderContent = '';
   lastInjectedAbstractContent = '';
+}
+
+function handleGenerationAfterCommands(): void {
+  void applyCalendarRuntimeWorldbookScan().catch(error => {
+    console.warn(`[${SCRIPT_NAME}] runtime worldbook generation scan 失败`, error);
+  });
+}
+
+function handleChatChanged(): void {
+  void applyCalendarRuntimeWorldbookScan().catch(error => {
+    console.warn(`[${SCRIPT_NAME}] runtime worldbook chat scan 失败`, error);
+  });
 }
 
 function applySilentScanPrompt(content: string): void {
@@ -294,7 +313,7 @@ export async function scanCalendarRuntimeWorldbook(): Promise<日历运行时扫
     return result;
   }
 
-  const context = 读取触发上下文();
+  const context = 读取触发上下文(index);
   await 扫描节庆介绍与全文(index, context, result);
   await 扫描节庆提醒(index, context, result);
   await 扫描书籍摘要(index, context, result);
@@ -338,11 +357,7 @@ function bindGenerationHook(): void {
     return;
   }
   generationHookBound = true;
-  eventOn(tavern_events.GENERATION_AFTER_COMMANDS, () => {
-    void applyCalendarRuntimeWorldbookScan().catch(error => {
-      console.warn(`[${SCRIPT_NAME}] runtime worldbook generation scan 失败`, error);
-    });
-  });
+  generationHookStop = eventOn(tavern_events.GENERATION_AFTER_COMMANDS, handleGenerationAfterCommands).stop;
 }
 
 function bindChatChangedHook(): void {
@@ -350,21 +365,38 @@ function bindChatChangedHook(): void {
     return;
   }
   chatChangedHookBound = true;
-  eventOn(tavern_events.CHAT_CHANGED, () => {
-    void applyCalendarRuntimeWorldbookScan().catch(error => {
-      console.warn(`[${SCRIPT_NAME}] runtime worldbook chat scan 失败`, error);
-    });
-  });
+  chatChangedHookStop = eventOn(tavern_events.CHAT_CHANGED, handleChatChanged).stop;
 }
 
 export function bootstrapCalendarRuntimeWorldbookScanner(): void {
+  globalThis.CalendarFloatRuntimeWorldbookScanner?.destroy();
   bindGenerationHook();
   bindChatChangedHook();
   void applyCalendarRuntimeWorldbookScan().catch(error => {
     console.warn(`[${SCRIPT_NAME}] 初始化 runtime worldbook scanner 失败`, error);
   });
+  globalThis.CalendarFloatRuntimeWorldbookScanner = {
+    destroy: teardownCalendarRuntimeWorldbookScanner,
+  };
 }
 
 export function teardownCalendarRuntimeWorldbookScanner(): void {
+  generationHookStop?.();
+  chatChangedHookStop?.();
+  generationHookStop = null;
+  chatChangedHookStop = null;
+  generationHookBound = false;
+  chatChangedHookBound = false;
   clearRuntimePrompts();
+  if (globalThis.CalendarFloatRuntimeWorldbookScanner?.destroy === teardownCalendarRuntimeWorldbookScanner) {
+    delete globalThis.CalendarFloatRuntimeWorldbookScanner;
+  }
+}
+
+declare global {
+  var CalendarFloatRuntimeWorldbookScanner:
+    | {
+        destroy: () => void;
+      }
+    | undefined;
 }

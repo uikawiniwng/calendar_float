@@ -184,6 +184,14 @@ export function normalizeMonthDayText(input: string): string {
   return `${pad2(Number(match[1]))}-${pad2(Number(match[2]))}`;
 }
 
+export function extractClockTimeText(input: string): string {
+  const match = String(input || '').match(/(?:^|[^\d])([01]?\d|2[0-3]):([0-5]\d)(?!\d)/);
+  if (!match) {
+    return '';
+  }
+  return `${pad2(Number(match[1]))}:${match[2]}`;
+}
+
 export function parseMonthDayWithYear(input: string, year: number): DatePoint | null {
   const normalized = normalizeMonthDayText(input);
   if (!normalized) {

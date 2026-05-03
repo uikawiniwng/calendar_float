@@ -45,7 +45,7 @@ export async function saveCalendarForm(input: CalendarFormSaveInput): Promise<Ca
   if (!input.id || !input.title || !input.content || !input.start) {
     return {
       ok: false,
-      message: '类型 / ID / 标题 / 内容 / 时间 不能为空',
+      message: '类型 / 标题 / 内容 / 时间 不能为空',
     };
   }
 

@@ -77,6 +77,18 @@ function 推断年份(now: DatePoint, month: number): number {
   return now.year;
 }
 
+function 解析周期举办年份(year: number, intervalYears?: number, lastYear?: number): number {
+  const interval = Math.floor(Number(intervalYears));
+  const last = Math.floor(Number(lastYear));
+  if (!Number.isFinite(interval) || interval <= 1 || !Number.isFinite(last)) {
+    return year;
+  }
+  const remainder = (((year - last) % interval) + interval) % interval;
+  const previous = year - remainder;
+  const next = previous + interval;
+  return Math.abs(year - previous) <= Math.abs(next - year) ? previous : next;
+}
+
 function 解析节庆日期范围(festival: 日历运行时节庆条目, now: DatePoint): { 开始: DatePoint; 结束: DatePoint } | null {
   const 开始文本 = 规范化文本(festival.开始);
   const 结束文本 = 规范化文本(festival.结束 || festival.开始);
@@ -85,11 +97,17 @@ function 解析节庆日期范围(festival: 日历运行时节庆条目, now: Da
   }
 
   const 开始月份 = Number(开始文本.split('-')[0]);
-  const 结束月份 = Number(结束文本.split('-')[0]);
-  const 开始 = parseMonthDayWithYear(开始文本, 推断年份(now, 开始月份));
-  const 结束 = parseMonthDayWithYear(结束文本, 推断年份(now, 结束月份));
+  const 举办年份 = 解析周期举办年份(推断年份(now, 开始月份), festival.周期?.每隔年, festival.周期?.上次年份);
+  const 开始 = parseMonthDayWithYear(开始文本, 举办年份);
+  let 结束 = parseMonthDayWithYear(结束文本, 举办年份);
   if (!开始 || !结束) {
     return null;
+  }
+  if (compareDatePoint(结束, 开始) < 0) {
+    结束 = parseMonthDayWithYear(结束文本, 举办年份 + 1);
+    if (!结束) {
+      return null;
+    }
   }
 
   return compareDatePoint(开始, 结束) <= 0 ? { 开始, 结束 } : { 开始: 结束, 结束: 开始 };
@@ -253,11 +271,17 @@ function 构建日期窗口(
   }
 
   const 开始月份 = Number(开始文本.split('-')[0]);
-  const 结束月份 = Number(结束文本.split('-')[0]);
-  const 开始 = parseMonthDayWithYear(开始文本, 推断年份(当前日期, 开始月份));
-  const 结束 = parseMonthDayWithYear(结束文本, 推断年份(当前日期, 结束月份));
+  const 举办年份 = 解析周期举办年份(推断年份(当前日期, 开始月份), condition.每隔年, condition.上次年份);
+  const 开始 = parseMonthDayWithYear(开始文本, 举办年份);
+  let 结束 = parseMonthDayWithYear(结束文本, 举办年份);
   if (!开始 || !结束) {
     return null;
+  }
+  if (compareDatePoint(结束, 开始) < 0) {
+    结束 = parseMonthDayWithYear(结束文本, 举办年份 + 1);
+    if (!结束) {
+      return null;
+    }
   }
 
   return {
@@ -560,8 +584,18 @@ export async function resolveCalendarFestivalReminder(
     };
   }
 
-  const resolved = await resolveCalendarRuntimeNodeText({ node: festival.提醒 });
   const fallback = buildDefaultReminderText(festival, window, festival.提醒);
+  if (festival.提醒?.输出?.模式 === 'silent_scan') {
+    return {
+      正文: fallback.正文,
+      状态: fallback.状态,
+      来源条目名: null,
+      文本库键: null,
+      警告: [],
+    };
+  }
+
+  const resolved = await resolveCalendarRuntimeNodeText({ node: festival.提醒 });
   return {
     正文: resolved.正文 || fallback.正文,
     状态: fallback.状态,
@@ -609,18 +643,21 @@ export async function resolveCalendarBookAbstract(
 export async function resolveCalendarContentNode(
   node: 日历运行时内容节点 | null | undefined,
   context: 日历运行时触发上下文,
+  options: { ignoreTrigger?: boolean } = {},
 ): Promise<{ 命中: boolean; 正文: string; 警告: string[] }> {
   if (!node || node.启用 === false) {
     return { 命中: false, 正文: '', 警告: [] };
   }
 
-  const triggerResult = evaluateCalendarRuntimeTrigger(node.触发, context);
-  if (!triggerResult.命中) {
-    return {
-      命中: false,
-      正文: '',
-      警告: triggerResult.原因,
-    };
+  if (!options.ignoreTrigger) {
+    const triggerResult = evaluateCalendarRuntimeTrigger(node.触发, context);
+    if (!triggerResult.命中) {
+      return {
+        命中: false,
+        正文: '',
+        警告: triggerResult.原因,
+      };
+    }
   }
 
   const resolved = await resolveCalendarRuntimeNodeText({ node });

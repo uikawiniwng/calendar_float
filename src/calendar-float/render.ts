@@ -10,6 +10,49 @@ function escapeHtml(value: unknown): string {
     .replace(/'/g, '&#39;');
 }
 
+function parseTagText(value: string | undefined): string[] {
+  return String(value || '')
+    .split(/[，,\n]/)
+    .map(item => item.trim())
+    .filter(Boolean)
+    .filter((item, index, array) => array.indexOf(item) === index);
+}
+
+function renderTagPicker(args: { selectedTags: string[]; tagCandidates: string[] }): string {
+  const selectedSet = new Set(args.selectedTags);
+  const candidates = [...args.tagCandidates, ...args.selectedTags]
+    .map(tag => String(tag || '').trim())
+    .filter(Boolean)
+    .filter((tag, index, array) => array.indexOf(tag) === index)
+    .sort((left, right) => left.localeCompare(right, 'zh-CN'));
+  const selectedChips = args.selectedTags.length
+    ? args.selectedTags
+        .map(
+          tag =>
+            `<button type="button" class="th-form-tag-chip" data-action="remove-form-tag" data-tag-value="${escapeHtml(tag)}">${escapeHtml(tag)} ×</button>`,
+        )
+        .join('')
+    : '<span class="th-tag-picker-empty">未选择标签</span>';
+  const candidateButtons = candidates
+    .map(tag => {
+      const active = selectedSet.has(tag);
+      return `<button type="button" class="th-tag-option ${active ? 'is-active' : ''}" data-action="toggle-form-tag" data-tag-value="${escapeHtml(tag)}" aria-pressed="${active ? 'true' : 'false'}">${escapeHtml(tag)}</button>`;
+    })
+    .join('');
+
+  return `
+    <div class="th-tag-picker" data-role="tag-picker">
+      <input type="hidden" data-form-field="tags" value="${escapeHtml(args.selectedTags.join(', '))}" />
+      <div class="th-selected-tag-list" data-role="selected-tag-list">${selectedChips}</div>
+      <div class="th-tag-search-row">
+        <input type="text" data-action="tag-search-input" placeholder="搜索标签，或输入新标签" />
+        <button type="button" class="th-btn" data-action="add-custom-tag">加入标签</button>
+      </div>
+      <div class="th-tag-option-list" data-role="tag-option-list">${candidateButtons || '<span class="th-tag-picker-empty">暂无候选标签</span>'}</div>
+    </div>
+  `;
+}
+
 export function renderFormHtml(args: {
   nowText: string;
   titleCandidates: string[];
@@ -28,6 +71,7 @@ export function renderFormHtml(args: {
   editing?: boolean;
 }): string {
   const values = args.values ?? {};
+  const selectedTags = parseTagText(values.tags);
   return `
     <section class="th-calendar-section">
       <div class="th-section-title-row">
@@ -44,17 +88,20 @@ export function renderFormHtml(args: {
             <option value="重复" ${values.type === '重复' ? 'selected' : ''}>重复</option>
           </select>
         </div>
-        <div class="th-form-field">
-          <label>ID</label>
-          <input data-form-field="id" value="${escapeHtml(values.id || '')}" placeholder="例如 quest_01" />
-        </div>
+        <details class="th-form-advanced" ${args.editing ? 'open' : ''}>
+          <summary>高级选项</summary>
+          <div class="th-form-field">
+            <label>事件 ID</label>
+            <input data-form-field="id" value="${escapeHtml(values.id || '')}" placeholder="留空自动生成，例如 quest_01" />
+          </div>
+        </details>
         <div class="th-form-field">
           <label>标题</label>
           <input data-form-field="title" value="${escapeHtml(values.title || '')}" placeholder="事件标题" />
         </div>
         <div class="th-form-field">
           <label>标签</label>
-          <input data-form-field="tags" value="${escapeHtml(values.tags || '')}" placeholder="例如 主线, 比赛" />
+          ${renderTagPicker({ selectedTags, tagCandidates: args.tagCandidates })}
         </div>
         <div class="th-form-field">
           <label>内容</label>
@@ -79,9 +126,9 @@ export function renderFormHtml(args: {
               .join('')}
           </select>
         </div>
-        <div class="th-card-actions">
-          <button type="button" class="th-btn" data-action="fill-now-time">现在</button>
-          <button type="button" class="th-btn" data-action="save-form">${args.editing ? '保存修改' : '新增事件'}</button>
+        <div class="th-form-actions">
+          <button type="button" class="th-btn" data-action="fill-now-time">填入当前时间</button>
+          <button type="button" class="th-btn th-primary-btn" data-action="save-form">${args.editing ? '保存修改' : '新增事件'}</button>
           <button type="button" class="th-btn" data-action="cancel-form">取消</button>
         </div>
       </div>

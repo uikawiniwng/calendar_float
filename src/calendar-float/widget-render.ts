@@ -1,5 +1,15 @@
+import { extractClockTimeText } from './date';
 import { formatCalendarMonthTitle } from './runtime-month-alias';
-import type { CalendarBookRecord, DailyAgendaGroup, DailyAgendaItem, MonthDayCell } from './types';
+import type {
+  ArchivedCalendarEvent,
+  CalendarArchivePolicy,
+  CalendarBookRecord,
+  CalendarEventColorStyle,
+  CalendarEventRecord,
+  DailyAgendaGroup,
+  DailyAgendaItem,
+  MonthDayCell,
+} from './types';
 
 export type AgendaSortMode = 'date-asc' | 'date-desc' | 'title-asc';
 
@@ -18,6 +28,19 @@ function isEditingItem(itemId: string, editingEventId: string | null): boolean {
 
 function buildEditingFlag(itemId: string, editingEventId: string | null): string {
   return isEditingItem(itemId, editingEventId) ? '<span class="th-item-editing-flag">当前编辑</span>' : '';
+}
+
+function buildCustomColorStyle(color?: CalendarEventColorStyle): string {
+  if (!color) {
+    return '';
+  }
+  const border = color.border || color.background;
+  return `--th-chip-bg: ${escapeWidgetHtml(color.background)}; --th-chip-text: ${escapeWidgetHtml(color.text)}; --th-chip-border: ${escapeWidgetHtml(border)}; --th-card-accent: ${escapeWidgetHtml(color.background)}; --th-card-accent-soft: ${escapeWidgetHtml(color.background)}; --th-card-accent-border: ${escapeWidgetHtml(border)}; --th-card-accent-strong: ${escapeWidgetHtml(color.text)};`;
+}
+
+function buildCustomColorAttrs(color?: CalendarEventColorStyle): string {
+  const style = buildCustomColorStyle(color);
+  return style ? ` has-custom-color" style="${style}"` : '"';
 }
 
 function buildItemActionButtons(item: Pick<DailyAgendaItem, 'id' | 'type' | 'source'>): string {
@@ -59,27 +82,37 @@ export function parseCalendarBookPages(
   });
 }
 
-function buildBookPagination(pages: CalendarBookPage[], currentPageIndex: number): string {
-  if (pages.length <= 1) {
-    return '';
-  }
+function getBookTitleFontSize(title: string): number {
+  const visualLength = Math.max(
+    Array.from(title).reduce((total, character) => total + (character.charCodeAt(0) <= 0xff ? 0.56 : 1), 0),
+    1,
+  );
+  return Math.max(8, Math.min(48, Math.floor(760 / visualLength)));
+}
+
+function buildBookFooterControls(pages: CalendarBookPage[], currentPageIndex: number): string {
+  const pageControls =
+    pages.length > 1
+      ? `<div class="th-book-pagination-main">
+          <button type="button" class="th-book-page-arrow" data-action="book-prev-page" ${currentPageIndex <= 0 ? 'disabled' : ''} aria-label="上一页">←</button>
+          <div class="th-book-page-number-list" aria-label="页码列表">
+            ${pages
+              .map(
+                page =>
+                  `<button type="button" class="th-book-page-number ${page.index === currentPageIndex ? 'is-active' : ''}" data-action="open-book-page" data-page-index="${page.index}" aria-pressed="${page.index === currentPageIndex ? 'true' : 'false'}">${page.index + 1}</button>`,
+              )
+              .join('')}
+          </div>
+          <button type="button" class="th-book-page-arrow" data-action="book-next-page" ${currentPageIndex >= pages.length - 1 ? 'disabled' : ''} aria-label="下一页">→</button>
+        </div>`
+      : '<div class="th-book-pagination-main th-book-pagination-main--empty" aria-hidden="true"></div>';
 
   return `
-    <div class="th-book-pagination">
-      <div class="th-book-pagination-main">
-        <button type="button" class="th-btn" data-action="book-prev-page" ${currentPageIndex <= 0 ? 'disabled' : ''}>上一页</button>
-        <div class="th-book-pagination-status">第 ${currentPageIndex + 1} / ${pages.length} 页</div>
-        <button type="button" class="th-btn" data-action="book-next-page" ${currentPageIndex >= pages.length - 1 ? 'disabled' : ''}>下一页</button>
-      </div>
-      <div class="th-book-page-tabs">
-        ${pages
-          .map(
-            page =>
-              `<button type="button" class="th-book-page-tab ${page.index === currentPageIndex ? 'is-active' : ''}" data-action="open-book-page" data-page-index="${page.index}" aria-pressed="${page.index === currentPageIndex ? 'true' : 'false'}">${escapeWidgetHtml(page.title)}</button>`,
-          )
-          .join('')}
-      </div>
-    </div>
+    <nav class="th-book-pagination${pages.length > 1 ? ' has-page-controls' : ' has-return-only'}" aria-label="读物底部控制">
+      <div class="th-book-pagination-spacer" aria-hidden="true"></div>
+      ${pageControls}
+      <button type="button" class="th-btn th-book-return-btn" data-action="close-book-reader">返回日期详情</button>
+    </nav>
   `;
 }
 
@@ -121,8 +154,10 @@ function renderWeekChipOverlay(week: MonthDayCell[]): string {
         return;
       }
       const span = countContinuousChipSpan(week, cellIndex, chipIndex);
+      const colorClass = chip.color ? ' has-custom-color' : '';
+      const customStyle = buildCustomColorStyle(chip.color);
       bars.push(
-        `<div class="th-chip th-week-chip-bar is-${chip.colorToken}" style="grid-column: ${cellIndex + 1} / span ${span}; grid-row: ${chipIndex + 1};" title="${escapeWidgetHtml(chip.title)}">${escapeWidgetHtml(chip.title)}</div>`,
+        `<div class="th-chip th-week-chip-bar is-${chip.colorToken}${colorClass}" style="grid-column: ${cellIndex + 1} / span ${span}; grid-row: ${chipIndex + 1}; ${customStyle}" title="${escapeWidgetHtml(chip.title)}">${escapeWidgetHtml(chip.title)}</div>`,
       );
     });
   });
@@ -131,7 +166,7 @@ function renderWeekChipOverlay(week: MonthDayCell[]): string {
 
 export function renderCalendarMonthView(options: {
   cells: MonthDayCell[];
-  currentMonth: { year: number; month: number };
+  currentMonth: { year: number; month: number; alias?: string };
 }): string {
   const { cells, currentMonth } = options;
   const weekRows = chunkWeekRows(cells);
@@ -139,7 +174,7 @@ export function renderCalendarMonthView(options: {
     <div class="th-month-view">
       <section class="th-month-header">
         <div>
-          <div class="th-month-title">${escapeWidgetHtml(formatCalendarMonthTitle(currentMonth.year, currentMonth.month))}</div>
+          <div class="th-month-title">${escapeWidgetHtml(formatCalendarMonthTitle(currentMonth.year, currentMonth.month, currentMonth.alias))}</div>
         </div>
         <div class="th-month-actions">
           <button type="button" class="th-btn" data-action="month-prev">上个月</button>
@@ -192,24 +227,38 @@ export function renderBookMainView(options: {
   const pages = parseCalendarBookPages(book);
   const safePageIndex = Math.min(Math.max(currentPageIndex, 0), pages.length - 1);
   const currentPage = pages[safePageIndex];
+  const pageTitle = currentPage.title.trim();
+  const bookTitle = book.title.trim();
+  const displayBookTitle = bookTitle || '未命名读物';
+  const decoratedBookTitle = `《${displayBookTitle}》`;
+  const titleFontSize = getBookTitleFontSize(decoratedBookTitle);
+  const shouldShowPageTitle =
+    !!pageTitle && pageTitle !== bookTitle && pageTitle !== displayBookTitle && !/^第\d+页$/.test(pageTitle);
 
   return `
     <article class="th-book-main-card">
       <div class="th-book-main-head">
-        <div>
-          <div class="th-month-title">${escapeWidgetHtml(book.title)}</div>
+        <div class="th-book-main-title-wrap">
+          <div class="th-month-title" style="--th-book-title-size: ${titleFontSize}px;">${escapeWidgetHtml(decoratedBookTitle)}</div>
           <div class="th-month-subtitle">读物正文 · Markdown 阅读模式</div>
-        </div>
-        <div class="th-month-actions">
-          <button type="button" class="th-btn" data-action="close-book-reader">返回日期详情</button>
         </div>
       </div>
       ${book.summary ? `<div class="th-reminder-summary"><div>${escapeWidgetHtml(book.summary)}</div></div>` : ''}
-      ${buildBookPagination(pages, safePageIndex)}
-      <div class="th-book-page-title">${escapeWidgetHtml(currentPage.title)}</div>
-      <div class="th-book-main-body">${renderMarkdownContent(currentPage.content || '（暂无内容）')}</div>
+      <section class="th-book-reading-surface" aria-label="${escapeWidgetHtml(shouldShowPageTitle ? pageTitle : displayBookTitle)}">
+        ${shouldShowPageTitle ? `<div class="th-book-page-title">${escapeWidgetHtml(pageTitle)}</div>` : ''}
+        <div class="th-book-main-body">${renderMarkdownContent(currentPage.content || '（暂无内容）')}</div>
+      </section>
+      ${buildBookFooterControls(pages, safePageIndex)}
     </article>
   `;
+}
+
+function buildItemClockMeta(item: Pick<DailyAgendaItem, 'startText' | 'endText'>, className: string): string {
+  const startClock = extractClockTimeText(item.startText);
+  const endClock = extractClockTimeText(item.endText);
+  const clockText =
+    startClock && endClock && endClock !== startClock ? `${startClock} ~ ${endClock}` : startClock || endClock;
+  return clockText ? `<div class="${className}">${escapeWidgetHtml(clockText)}</div>` : '';
 }
 
 function matchesAgendaKeyword(item: DailyAgendaItem, keyword: string): boolean {
@@ -274,7 +323,7 @@ export function renderAgendaPanel(options: {
         <input type="text" data-action="agenda-filter-input" value="${escapeWidgetHtml(filterKeyword)}" placeholder="筛选当前列表中的事件" />
       </div>
       <div class="th-agenda-toolbar-row">
-        <label class="th-agenda-toggle"><input type="checkbox" data-action="agenda-toggle-archived" ${showArchived ? 'checked' : ''} />显示归档事件</label>
+        <label class="th-agenda-toggle"><input class="th-native-check" type="checkbox" data-action="agenda-toggle-archived" ${showArchived ? 'checked' : ''} /><span class="th-check-proxy" aria-hidden="true">${showArchived ? '✓' : ''}</span><span>显示归档事件</span></label>
         <select data-action="agenda-sort-select">
           <option value="date-asc" ${agendaSort === 'date-asc' ? 'selected' : ''}>日期升序</option>
           <option value="date-desc" ${agendaSort === 'date-desc' ? 'selected' : ''}>日期降序</option>
@@ -297,7 +346,7 @@ export function renderAgendaPanel(options: {
                     if (isEditingItem(item.id, editingEventId)) {
                       classes.push('is-editing');
                     }
-                    return `<article class="${classes.join(' ')}" data-action="open-agenda-item-date" data-date-key="${escapeWidgetHtml(item.dateKey)}"><div class="th-item-top"><div class="th-item-title-wrap"><div class="th-item-title">${escapeWidgetHtml(item.title)}</div>${buildEditingFlag(item.id, editingEventId)}</div>${actionButtons}</div>${item.stageTitle ? `<div class="th-item-stage">${escapeWidgetHtml(item.stageTitle)}</div>` : ''}<div class="th-item-time">${escapeWidgetHtml(item.startText || '未填写')} ${item.endText ? `~ ${escapeWidgetHtml(item.endText)}` : ''}</div><div class="th-item-summary">${escapeWidgetHtml(item.summary || '（无详情）')}</div>${tags}</article>`;
+                    return `<article class="${classes.join(' ')}${buildCustomColorAttrs(item.color)} data-action="open-agenda-item-date" data-date-key="${escapeWidgetHtml(item.dateKey)}"><div class="th-item-top"><div class="th-item-title-wrap"><div class="th-item-title">${escapeWidgetHtml(item.title)}</div>${buildEditingFlag(item.id, editingEventId)}</div>${actionButtons}</div>${item.stageTitle ? `<div class="th-item-stage">${escapeWidgetHtml(item.stageTitle)}</div>` : ''}${buildItemClockMeta(item, 'th-item-time')}<div class="th-item-summary">${escapeWidgetHtml(item.summary || '（无详情）')}</div>${tags}</article>`;
                   })
                   .join('');
                 return `<section class="th-agenda-group"><div class="th-agenda-date">${escapeWidgetHtml(group.label)}</div>${items}</section>`;
@@ -317,29 +366,30 @@ export function renderDetailPanel(options: {
   booksById: Record<string, CalendarBookRecord>;
   editingEventId: string | null;
   renderMarkdownContent: (markdown: string) => string;
+  addonHtml?: string;
 }): string {
   const {
-    selectedLabel,
     selectedItems,
     openedBook,
     openedBookPageIndex,
     booksById,
     editingEventId,
     renderMarkdownContent,
+    addonHtml = '',
   } = options;
   if (openedBook) {
     const pages = parseCalendarBookPages(openedBook);
     const safePageIndex = Math.min(Math.max(openedBookPageIndex, 0), pages.length - 1);
     const currentPage = pages[safePageIndex];
-    return `<article class="th-detail-card is-book-reader"><div class="th-book-reader-head"><div><div class="th-item-title">${escapeWidgetHtml(openedBook.title)}</div><div class="th-detail-meta">读物详情</div></div><button type="button" class="th-book-link" data-action="close-book-reader">返回日期详情</button></div>${openedBook.summary ? `<div class="th-detail-summary">${escapeWidgetHtml(openedBook.summary)}</div>` : ''}${buildBookPagination(pages, safePageIndex)}<div class="th-book-page-title">${escapeWidgetHtml(currentPage.title)}</div><div class="th-book-reader-body">${renderMarkdownContent(currentPage.content || '（暂无内容）')}</div></article>`;
+    const bookTitle = openedBook.title.trim() || '未命名读物';
+    const decoratedBookTitle = `《${bookTitle}》`;
+    const titleFontSize = getBookTitleFontSize(decoratedBookTitle);
+    return `<article class="th-detail-card is-book-reader"><div class="th-book-reader-head"><div class="th-book-main-title-wrap"><div class="th-item-title" style="--th-book-title-size: ${titleFontSize}px;">${escapeWidgetHtml(decoratedBookTitle)}</div><div class="th-detail-meta">读物详情</div></div></div>${openedBook.summary ? `<div class="th-detail-summary">${escapeWidgetHtml(openedBook.summary)}</div>` : ''}<div class="th-book-page-title">${escapeWidgetHtml(currentPage.title)}</div><div class="th-book-reader-body">${renderMarkdownContent(currentPage.content || '（暂无内容）')}</div>${buildBookFooterControls(pages, safePageIndex)}</article>`;
   }
-  const heading = `
-    <div class="th-side-section-head">
-      <div class="th-side-section-title">${escapeWidgetHtml(selectedLabel || '日期详情')}</div>
-    </div>
-  `;
   if (!selectedItems.length) {
-    return `<section class="th-side-section">${heading}<div class="th-empty">这一天暂时没有命中的事件。</div></section>`;
+    return (
+      addonHtml || '<section class="th-side-section"><div class="th-empty">这一天暂时没有命中的事件。</div></section>'
+    );
   }
   const cards = selectedItems
     .map(item => {
@@ -358,8 +408,136 @@ export function renderDetailPanel(options: {
       if (isEditingItem(item.id, editingEventId)) {
         classes.push('is-editing');
       }
-      return `<article class="${classes.join(' ')}"><div class="th-item-top"><div class="th-item-title-wrap"><div class="th-item-title">${escapeWidgetHtml(item.title)}</div>${buildEditingFlag(item.id, editingEventId)}</div>${buildItemActionButtons(item)}</div>${item.stageTitle ? `<div class="th-item-stage">${escapeWidgetHtml(item.stageTitle)}</div>` : ''}<div class="th-detail-meta">${escapeWidgetHtml(item.type)} · ${escapeWidgetHtml(item.startText || '未填写')}${item.endText ? ` ~ ${escapeWidgetHtml(item.endText)}` : ''}</div><div class="th-detail-summary">${escapeWidgetHtml(item.summary || '（无详情）')}</div>${tags}${books ? `<div class="th-detail-books">${books}</div>` : ''}</article>`;
+      return `<article class="${classes.join(' ')}${buildCustomColorAttrs(item.color)}><div class="th-item-top"><div class="th-item-title-wrap"><div class="th-item-title">${escapeWidgetHtml(item.title)}</div>${buildEditingFlag(item.id, editingEventId)}</div>${buildItemActionButtons(item)}</div>${item.stageTitle ? `<div class="th-item-stage">${escapeWidgetHtml(item.stageTitle)}</div>` : ''}${buildItemClockMeta(item, 'th-detail-meta')}<div class="th-detail-summary">${escapeWidgetHtml(item.summary || '（无详情）')}</div>${tags}${books ? `<div class="th-detail-books">${books}</div>` : ''}</article>`;
     })
     .join('');
-  return `<section class="th-side-section">${heading}${cards}</section>`;
+  return `${addonHtml}<section class="th-side-section">${cards}</section>`;
+}
+
+function serializeTagList(tags: string[]): string {
+  return tags.join(', ');
+}
+
+function renderPolicyTagPicker(args: {
+  field: string;
+  selectedTags: string[];
+  tagCandidates: string[];
+  placeholder: string;
+}): string {
+  const selectedSet = new Set(args.selectedTags);
+  const escapedField = escapeWidgetHtml(args.field);
+  const listId = `th-policy-tag-list-${args.field.replace(/[^a-z0-9_-]/gi, '-')}`;
+  const candidates = [...args.tagCandidates, ...args.selectedTags]
+    .map(tag => String(tag || '').trim())
+    .filter(Boolean)
+    .filter((tag, index, array) => array.indexOf(tag) === index)
+    .sort((left, right) => {
+      const selectedRank = Number(selectedSet.has(right)) - Number(selectedSet.has(left));
+      return selectedRank || left.localeCompare(right, 'zh-CN');
+    });
+  const optionHtml = candidates
+    .map(tag => {
+      const active = selectedSet.has(tag);
+      return `<button type="button" class="th-tag-option ${active ? 'is-active' : ''}" data-action="toggle-policy-tag" data-policy-tag-field="${escapedField}" data-tag-value="${escapeWidgetHtml(tag)}" aria-pressed="${active ? 'true' : 'false'}"><span class="th-tag-option-check" aria-hidden="true">${active ? '✓' : ''}</span><span>${escapeWidgetHtml(tag)}</span></button>`;
+    })
+    .join('');
+  return `
+    <div class="th-tag-picker th-policy-tag-picker" data-role="policy-tag-picker" data-policy-tag-field="${escapedField}">
+      <input type="hidden" data-policy-field="${escapedField}" value="${escapeWidgetHtml(serializeTagList(args.selectedTags))}" />
+      <div class="th-policy-tag-search-shell">
+        <input type="text" data-action="policy-tag-search-input" data-policy-tag-field="${escapedField}" placeholder="${escapeWidgetHtml(args.placeholder)}" aria-controls="${escapeWidgetHtml(listId)}" />
+        <button type="button" class="th-policy-tag-arrow" data-action="toggle-policy-tag-list" data-policy-tag-field="${escapedField}" aria-expanded="false" aria-controls="${escapeWidgetHtml(listId)}" aria-label="展开可用标签">▾</button>
+        <button type="button" class="th-btn th-policy-tag-add" data-action="add-policy-tag" data-policy-tag-field="${escapedField}">加入</button>
+      </div>
+      <div class="th-policy-tag-meta">已选 ${args.selectedTags.length} 个；展开列表可直接勾选</div>
+      <div id="${escapeWidgetHtml(listId)}" class="th-tag-option-list" data-role="policy-tag-option-list" hidden>${optionHtml || '<span class="th-tag-picker-empty" data-role="policy-tag-empty">暂无候选标签</span>'}</div>
+    </div>
+  `;
+}
+
+function formatArchiveReason(event: ArchivedCalendarEvent | undefined): string {
+  switch (event?.archive_reason) {
+    case 'auto_cleanup':
+      return '自动清理';
+    case 'manual_delete':
+      return '手动移入';
+    case 'memory':
+      return '回忆';
+    case 'completed':
+    default:
+      return '完成';
+  }
+}
+
+export function renderArchivePanel(options: {
+  archivedEvents: CalendarEventRecord[];
+  filterKeyword: string;
+  policy: CalendarArchivePolicy;
+  tagCandidates: string[];
+}): string {
+  const keyword = options.filterKeyword.trim().toLowerCase();
+  const filteredEvents = options.archivedEvents
+    .filter(event => {
+      if (!keyword) {
+        return true;
+      }
+      return [event.title, event.content, event.tags.join(' '), event.id].join(' ').toLowerCase().includes(keyword);
+    })
+    .sort((left, right) =>
+      String(right.metadata.archived_at || '').localeCompare(String(left.metadata.archived_at || '')),
+    );
+  const eventCards = filteredEvents.length
+    ? filteredEvents
+        .map(event => {
+          const raw = event.raw as ArchivedCalendarEvent | undefined;
+          const tags = event.tags.length
+            ? `<div class="th-item-tags">${event.tags.map(tag => `<span>${escapeWidgetHtml(tag)}</span>`).join('')}</div>`
+            : '';
+          return `<article class="th-agenda-item is-archive${buildCustomColorAttrs(event.color)}><div class="th-item-top"><div class="th-item-title-wrap"><div class="th-item-title">${escapeWidgetHtml(event.title)}</div><span class="th-item-editing-flag">${escapeWidgetHtml(formatArchiveReason(raw))}</span></div>${buildItemActionButtons({ id: event.id, type: event.type, source: 'archive' })}</div><div class="th-item-time">${escapeWidgetHtml(event.startText || '未填写')}${event.endText ? ` ~ ${escapeWidgetHtml(event.endText)}` : ''}</div><div class="th-item-summary">${escapeWidgetHtml(event.content || '（无详情）')}</div>${tags}</article>`;
+        })
+        .join('')
+    : '<div class="th-empty">归档区里没有匹配的事件。</div>';
+
+  return `
+    <section class="th-agenda-toolbar">
+      <div class="th-agenda-toolbar-row">
+        <input type="text" data-action="agenda-filter-input" value="${escapeWidgetHtml(options.filterKeyword)}" placeholder="筛选归档事件" />
+      </div>
+      <div class="th-agenda-toolbar-row">
+        <button type="button" class="th-btn is-danger" data-action="purge-auto-delete-archive">清理黑名单归档</button>
+      </div>
+    </section>
+    <section class="th-archive-policy-panel">
+      <div class="th-side-section-head">
+        <div>
+          <div class="th-side-section-title">归档规则</div>
+          <div class="th-side-section-subtitle">收藏优先于黑名单；未命中的事件默认进入归档区。</div>
+        </div>
+      </div>
+      <label class="th-agenda-toggle"><input class="th-native-check" type="checkbox" data-policy-field="archive-on-active-removal" ${options.policy.archiveOnActiveRemoval ? 'checked' : ''} /><span class="th-check-proxy" aria-hidden="true">${options.policy.archiveOnActiveRemoval ? '✓' : ''}</span><span>LLM 移除事件时默认归档</span></label>
+      <div class="th-form-field th-archive-policy-section th-archive-policy-section--delete">
+        <div class="th-policy-field-label"><span>黑名单标签</span><small>命中后直接清理，不进入归档。</small></div>
+        ${renderPolicyTagPicker({
+          field: 'auto-delete-tags',
+          selectedTags: options.policy.autoDeleteTags,
+          tagCandidates: options.tagCandidates,
+          placeholder: '搜索黑名单标签，或输入新标签',
+        })}
+      </div>
+      <div class="th-archive-policy-divider" aria-hidden="true"></div>
+      <div class="th-form-field th-archive-policy-section th-archive-policy-section--protect">
+        <div class="th-policy-field-label"><span>收藏保护标签</span><small>命中后永不自动删除或归档。</small></div>
+        ${renderPolicyTagPicker({
+          field: 'protected-tags',
+          selectedTags: options.policy.protectedTags,
+          tagCandidates: options.tagCandidates,
+          placeholder: '搜索收藏保护标签，或输入新标签',
+        })}
+      </div>
+      <div class="th-card-actions">
+        <button type="button" class="th-btn th-primary-btn" data-action="save-archive-policy">保存规则</button>
+      </div>
+    </section>
+    <section class="th-agenda-groups">${eventCards}</section>
+  `;
 }

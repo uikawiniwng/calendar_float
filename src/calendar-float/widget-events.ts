@@ -1,6 +1,6 @@
 import type { WidgetRefs } from './types';
 
-type SidebarTab = 'detail' | 'form';
+type SidebarTab = 'detail' | 'form' | 'archive';
 type AgendaSortMode = 'date-asc' | 'date-desc' | 'title-asc';
 type CalendarBucketType = '临时' | '重复';
 
@@ -9,9 +9,14 @@ export interface BindCalendarWidgetEventsOptions {
   hostDocument: Document;
   hostWindow: Window & typeof globalThis;
   onToggleBall: () => void;
+  onBallDragStart: (clientX: number, clientY: number) => void;
+  onBallDragMove: (clientX: number, clientY: number) => void;
+  onBallDragEnd: () => void;
   onClosePanel: () => void;
   onReload: () => void | Promise<void>;
   onToggleTheme: () => void;
+  onOpenTagColorPanel: () => void;
+  onCloseTagColorPanel: () => void;
   onManagedWorldbookClick: () => void | Promise<void>;
   onSwitchTab: (tab: SidebarTab) => void;
   onOpenCreateForm: () => void;
@@ -19,6 +24,21 @@ export interface BindCalendarWidgetEventsOptions {
   onCancelForm: () => void;
   onFillNowTime: () => void | Promise<void>;
   onSaveForm: () => void | Promise<void>;
+  onTagSearchInput: (keyword: string) => void;
+  onToggleFormTag: (tag: string) => void;
+  onRemoveFormTag: (tag: string) => void;
+  onAddCustomTag: () => void;
+  onTagColorSearchInput: (keyword: string) => void;
+  onAddColorTag: () => void;
+  onSelectTagColor: (tag: string) => void;
+  onApplyTagColorPalette: (color: { background: string; text: string; border?: string }) => void;
+  onSaveTagColorHex: () => void;
+  onResetTagColor: () => void;
+  onPolicyTagSearchInput: (field: string, keyword: string) => void;
+  onTogglePolicyTag: (field: string, tag: string) => void;
+  onRemovePolicyTag: (field: string, tag: string) => void;
+  onAddPolicyTag: (field: string) => void;
+  onTogglePolicyTagList: (field: string) => void;
   onPickDay: (dateKey: string) => void;
   onMonthPrev: () => void;
   onMonthNext: () => void;
@@ -33,6 +53,8 @@ export interface BindCalendarWidgetEventsOptions {
   onDeleteEvent: (eventId: string) => void | Promise<void>;
   onRestoreEvent: (eventId: string) => void | Promise<void>;
   onPurgeEvent: (eventId: string) => void | Promise<void>;
+  onSaveArchivePolicy: () => void | Promise<void>;
+  onPurgeAutoDeleteArchive: () => void | Promise<void>;
   onAgendaFilterInput: (keyword: string) => void;
   onAgendaToggleArchived: (checked: boolean) => void;
   onAgendaSortChange: (sort: AgendaSortMode) => void;
@@ -44,6 +66,9 @@ export interface BindCalendarWidgetEventsOptions {
 }
 
 function parseSidebarTab(value: string): SidebarTab {
+  if (value === 'archive') {
+    return 'archive';
+  }
   return value === 'form' ? 'form' : 'detail';
 }
 
@@ -55,6 +80,12 @@ function parseCalendarBucketType(value: string): CalendarBucketType {
   return value === '重复' ? '重复' : '临时';
 }
 
+function getTouchClientPoint(event: JQuery.TouchEventBase): { clientX: number; clientY: number } | null {
+  const originalEvent = event.originalEvent;
+  const touch = originalEvent?.touches[0] ?? originalEvent?.changedTouches[0];
+  return touch ? { clientX: touch.clientX, clientY: touch.clientY } : null;
+}
+
 export function bindCalendarWidgetEvents(options: BindCalendarWidgetEventsOptions): void {
   const { refs, hostDocument, hostWindow } = options;
   if (!refs.root || !refs.ball) {
@@ -64,7 +95,23 @@ export function bindCalendarWidgetEvents(options: BindCalendarWidgetEventsOption
   $(refs.ball).off('.calendar-float');
   $(refs.root).off('.calendar-float');
   $(hostDocument).off('.calendar-float-panel-drag');
+  $(hostDocument).off('.calendar-float-ball-drag');
+  $(hostDocument).off('.calendar-float-tools-menu');
   $(hostWindow).off('.calendar-float-window');
+
+  $(refs.ball).on('mousedown.calendar-float', event => {
+    options.onBallDragStart(event.clientX, event.clientY);
+    event.preventDefault();
+  });
+
+  $(refs.ball).on('touchstart.calendar-float', event => {
+    const point = getTouchClientPoint(event);
+    if (!point) {
+      return;
+    }
+    options.onBallDragStart(point.clientX, point.clientY);
+    event.stopPropagation();
+  });
 
   $(refs.ball).on('click.calendar-float', () => {
     options.onToggleBall();
@@ -82,8 +129,25 @@ export function bindCalendarWidgetEvents(options: BindCalendarWidgetEventsOption
     options.onToggleTheme();
   });
 
-  $(refs.root).on('click.calendar-float', '[data-action="managed-worldbook-connectivity"]', () => {
+  $(refs.root).on('click.calendar-float', '[data-action="open-tag-color-panel"]', () => {
+    options.onOpenTagColorPanel();
+  });
+
+  $(refs.root).on('click.calendar-float', '[data-action="close-tag-color-panel"]', () => {
+    options.onCloseTagColorPanel();
+  });
+
+  $(refs.root).on('click.calendar-float', '[data-action="managed-worldbook-connectivity"]', event => {
+    (event.currentTarget as HTMLElement).closest<HTMLDetailsElement>('.th-tools-menu')?.removeAttribute('open');
     void options.onManagedWorldbookClick();
+  });
+
+  $(refs.root).on('click.calendar-float', '.th-tool-menu-item', event => {
+    const currentAction = String((event.currentTarget as HTMLElement).getAttribute('data-action') || '');
+    if (currentAction === 'managed-worldbook-connectivity') {
+      return;
+    }
+    (event.currentTarget as HTMLElement).closest<HTMLDetailsElement>('.th-tools-menu')?.removeAttribute('open');
   });
 
   $(refs.root).on('click.calendar-float', '[data-action="switch-tab"]', event => {
@@ -93,6 +157,11 @@ export function bindCalendarWidgetEvents(options: BindCalendarWidgetEventsOption
 
   $(refs.root).on('click.calendar-float', '[data-action="open-create-form"]', () => {
     options.onOpenCreateForm();
+  });
+
+  $(refs.root).on('click.calendar-float', '[data-action="focus-agenda-filter"]', () => {
+    const input = refs.root?.querySelector<HTMLInputElement>('[data-action="agenda-filter-input"]');
+    input?.focus();
   });
 
   $(refs.root).on('click.calendar-float', '[data-action="close-mobile-side"]', () => {
@@ -109,6 +178,101 @@ export function bindCalendarWidgetEvents(options: BindCalendarWidgetEventsOption
 
   $(refs.root).on('click.calendar-float', '[data-action="save-form"]', () => {
     void options.onSaveForm();
+  });
+
+  $(refs.root).on('input.calendar-float', '[data-action="tag-search-input"]', event => {
+    options.onTagSearchInput(String((event.currentTarget as HTMLInputElement).value || ''));
+  });
+
+  $(refs.root).on('click.calendar-float', '[data-action="toggle-form-tag"]', event => {
+    const tag = String((event.currentTarget as HTMLElement).getAttribute('data-tag-value') || '').trim();
+    if (tag) {
+      options.onToggleFormTag(tag);
+    }
+  });
+
+  $(refs.root).on('click.calendar-float', '[data-action="remove-form-tag"]', event => {
+    const tag = String((event.currentTarget as HTMLElement).getAttribute('data-tag-value') || '').trim();
+    if (tag) {
+      options.onRemoveFormTag(tag);
+    }
+  });
+
+  $(refs.root).on('click.calendar-float', '[data-action="add-custom-tag"]', () => {
+    options.onAddCustomTag();
+  });
+
+  $(refs.root).on('input.calendar-float', '[data-action="tag-color-search-input"]', event => {
+    options.onTagColorSearchInput(String((event.currentTarget as HTMLInputElement).value || ''));
+  });
+
+  $(refs.root).on('click.calendar-float', '[data-action="add-color-tag"]', () => {
+    options.onAddColorTag();
+  });
+
+  $(refs.root).on('click.calendar-float', '[data-action="select-tag-color"]', event => {
+    const tag = String((event.currentTarget as HTMLElement).getAttribute('data-tag-value') || '').trim();
+    if (tag) {
+      options.onSelectTagColor(tag);
+    }
+  });
+
+  $(refs.root).on('click.calendar-float', '[data-action="apply-tag-color-palette"]', event => {
+    const button = event.currentTarget as HTMLElement;
+    const background = String(button.getAttribute('data-background') || '').trim();
+    const text = String(button.getAttribute('data-text') || '').trim();
+    const border = String(button.getAttribute('data-border') || '').trim();
+    if (background && text) {
+      options.onApplyTagColorPalette({ background, text, ...(border ? { border } : {}) });
+    }
+  });
+
+  $(refs.root).on('click.calendar-float', '[data-action="save-tag-color-hex"]', () => {
+    options.onSaveTagColorHex();
+  });
+
+  $(refs.root).on('click.calendar-float', '[data-action="reset-tag-color"]', () => {
+    options.onResetTagColor();
+  });
+
+  $(refs.root).on('input.calendar-float', '[data-action="policy-tag-search-input"]', event => {
+    const input = event.currentTarget as HTMLInputElement;
+    const field = String(input.getAttribute('data-policy-tag-field') || '').trim();
+    if (field) {
+      options.onPolicyTagSearchInput(field, String(input.value || ''));
+    }
+  });
+
+  $(refs.root).on('click.calendar-float', '[data-action="toggle-policy-tag"]', event => {
+    const button = event.currentTarget as HTMLElement;
+    const field = String(button.getAttribute('data-policy-tag-field') || '').trim();
+    const tag = String(button.getAttribute('data-tag-value') || '').trim();
+    if (field && tag) {
+      options.onTogglePolicyTag(field, tag);
+    }
+  });
+
+  $(refs.root).on('click.calendar-float', '[data-action="remove-policy-tag"]', event => {
+    const button = event.currentTarget as HTMLElement;
+    const field = String(button.getAttribute('data-policy-tag-field') || '').trim();
+    const tag = String(button.getAttribute('data-tag-value') || '').trim();
+    if (field && tag) {
+      options.onRemovePolicyTag(field, tag);
+    }
+  });
+
+  $(refs.root).on('click.calendar-float', '[data-action="add-policy-tag"]', event => {
+    const field = String((event.currentTarget as HTMLElement).getAttribute('data-policy-tag-field') || '').trim();
+    if (field) {
+      options.onAddPolicyTag(field);
+    }
+  });
+
+  $(refs.root).on('click.calendar-float', '[data-action="toggle-policy-tag-list"]', event => {
+    const field = String((event.currentTarget as HTMLElement).getAttribute('data-policy-tag-field') || '').trim();
+    if (field) {
+      options.onTogglePolicyTagList(field);
+    }
   });
 
   $(refs.root).on('click.calendar-float', '[data-action="pick-day"]', event => {
@@ -132,6 +296,8 @@ export function bindCalendarWidgetEvents(options: BindCalendarWidgetEventsOption
   });
 
   $(refs.root).on('click.calendar-float', '[data-action="open-book"]', event => {
+    event.preventDefault();
+    event.stopPropagation();
     const bookId = String((event.currentTarget as HTMLElement).getAttribute('data-book-id') || '');
     if (!bookId) {
       return;
@@ -199,6 +365,14 @@ export function bindCalendarWidgetEvents(options: BindCalendarWidgetEventsOption
     void options.onPurgeEvent(eventId);
   });
 
+  $(refs.root).on('click.calendar-float', '[data-action="save-archive-policy"]', () => {
+    void options.onSaveArchivePolicy();
+  });
+
+  $(refs.root).on('click.calendar-float', '[data-action="purge-auto-delete-archive"]', () => {
+    void options.onPurgeAutoDeleteArchive();
+  });
+
   $(refs.root).on('input.calendar-float', '[data-action="agenda-filter-input"]', event => {
     options.onAgendaFilterInput(String((event.currentTarget as HTMLInputElement).value || ''));
   });
@@ -239,7 +413,40 @@ export function bindCalendarWidgetEvents(options: BindCalendarWidgetEventsOption
     options.onPanelDragEnd();
   });
 
+  $(hostDocument).on('mousemove.calendar-float-ball-drag', event => {
+    options.onBallDragMove(event.clientX, event.clientY);
+  });
+
+  $(hostDocument).on('mouseup.calendar-float-ball-drag', () => {
+    options.onBallDragEnd();
+  });
+
+  $(hostDocument).on('touchmove.calendar-float-ball-drag', event => {
+    const point = getTouchClientPoint(event);
+    if (!point) {
+      return;
+    }
+    options.onBallDragMove(point.clientX, point.clientY);
+  });
+
+  $(hostDocument).on('touchend.calendar-float-ball-drag touchcancel.calendar-float-ball-drag', () => {
+    options.onBallDragEnd();
+  });
+
+  $(hostDocument).on('mousedown.calendar-float-tools-menu touchstart.calendar-float-tools-menu', event => {
+    const target = event.target as unknown as HTMLElement | null;
+    if (!target || target.closest(`#${refs.root?.id || ''} .th-tools-menu`)) {
+      return;
+    }
+    refs.root?.querySelectorAll<HTMLDetailsElement>('.th-tools-menu[open]').forEach(menu => {
+      menu.removeAttribute('open');
+    });
+  });
+
   $(hostWindow).on('resize.calendar-float-window', () => {
+    refs.root?.querySelectorAll<HTMLDetailsElement>('.th-tools-menu[open]').forEach(menu => {
+      menu.removeAttribute('open');
+    });
     options.onWindowResize();
   });
 }

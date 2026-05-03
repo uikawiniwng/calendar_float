@@ -1,4 +1,5 @@
 import { SCRIPT_NAME } from './constants';
+import { bootstrapCalendarFloatHostAdapter, teardownCalendarFloatHostAdapter } from './host-adapter';
 import {
   bootstrapCalendarRuntimeWorldbookScanner,
   teardownCalendarRuntimeWorldbookScanner,
@@ -6,18 +7,32 @@ import {
 import { bootstrapCalendarWidget } from './widget';
 import {
   ensureCalendarManagedWorldbookEntries,
+  getCalendarManagedWorldbookTargetName,
   installCalendarManagedEntriesToExternalWorldbook,
   installCalendarManagedWorldbookEntries,
   uninstallCalendarManagedWorldbookEntries,
 } from './worldbook-backend-manager';
 
+function notifyManagedWorldbookEnsure(result: Awaited<ReturnType<typeof ensureCalendarManagedWorldbookEntries>>): void {
+  if (!result.created && !result.updated) {
+    return;
+  }
+  const target = getCalendarManagedWorldbookTargetName() || result.name;
+  const targetModeText =
+    result.targetMode === 'stored_external' ? '已使用你上次选择的外部 worldbook' : '首次自动写入当前角色主 worldbook';
+  toastr.info(`月历球已写入后端基础条目：${target}\n${targetModeText}\n可在后端面板查看/搬运来源。`);
+}
+
 function init(): void {
   console.info(`[${SCRIPT_NAME}] 开始初始化`);
-  void ensureCalendarManagedWorldbookEntries().catch(error => {
-    console.warn(`[${SCRIPT_NAME}] 初始化托管 worldbook 条目失败`, error);
-  });
+  void ensureCalendarManagedWorldbookEntries()
+    .then(notifyManagedWorldbookEnsure)
+    .catch(error => {
+      console.warn(`[${SCRIPT_NAME}] 初始化托管 worldbook 条目失败`, error);
+    });
   bootstrapCalendarRuntimeWorldbookScanner();
   bootstrapCalendarWidget();
+  void bootstrapCalendarFloatHostAdapter();
 
   Object.assign(globalThis, {
     CalendarFloatInstallManagedWorldbookEntries: async () => installCalendarManagedWorldbookEntries(),
@@ -29,6 +44,7 @@ function init(): void {
 
 function cleanup(): void {
   console.info(`[${SCRIPT_NAME}] 开始卸载`);
+  teardownCalendarFloatHostAdapter({ unregister: true, silent: true });
   teardownCalendarRuntimeWorldbookScanner();
   window.CalendarFloatWidget?.destroy('pagehide');
 }
@@ -61,6 +77,7 @@ declare global {
       open: () => void;
       close: () => void;
       reload: () => Promise<void> | void;
+      setExternalHostMode?: (enabled: boolean) => void;
     };
   }
 }
