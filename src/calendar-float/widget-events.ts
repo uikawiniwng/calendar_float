@@ -87,16 +87,19 @@ function getTouchClientPoint(event: JQuery.TouchEventBase): { clientX: number; c
 }
 
 export function bindCalendarWidgetEvents(options: BindCalendarWidgetEventsOptions): void {
-  const { refs, hostDocument, hostWindow } = options;
+  const { refs, hostWindow } = options;
   if (!refs.root || !refs.ball) {
     return;
   }
 
+  const rootDocument = refs.root.ownerDocument;
+  const ballDocument = refs.ball.ownerDocument;
+
   $(refs.ball).off('.calendar-float');
   $(refs.root).off('.calendar-float');
-  $(hostDocument).off('.calendar-float-panel-drag');
-  $(hostDocument).off('.calendar-float-ball-drag');
-  $(hostDocument).off('.calendar-float-tools-menu');
+  $(rootDocument).off('.calendar-float-panel-drag');
+  $(ballDocument).off('.calendar-float-ball-drag');
+  $(rootDocument).off('.calendar-float-tools-menu');
   $(hostWindow).off('.calendar-float-window');
 
   $(refs.ball).on('mousedown.calendar-float', event => {
@@ -405,23 +408,23 @@ export function bindCalendarWidgetEvents(options: BindCalendarWidgetEventsOption
     options.onPanelDragStart(event as unknown as MouseEvent);
   });
 
-  $(hostDocument).on('mousemove.calendar-float-panel-drag', event => {
+  $(rootDocument).on('mousemove.calendar-float-panel-drag', event => {
     options.onPanelDragMove(event as unknown as MouseEvent);
   });
 
-  $(hostDocument).on('mouseup.calendar-float-panel-drag', () => {
+  $(rootDocument).on('mouseup.calendar-float-panel-drag', () => {
     options.onPanelDragEnd();
   });
 
-  $(hostDocument).on('mousemove.calendar-float-ball-drag', event => {
+  $(ballDocument).on('mousemove.calendar-float-ball-drag', event => {
     options.onBallDragMove(event.clientX, event.clientY);
   });
 
-  $(hostDocument).on('mouseup.calendar-float-ball-drag', () => {
+  $(ballDocument).on('mouseup.calendar-float-ball-drag', () => {
     options.onBallDragEnd();
   });
 
-  $(hostDocument).on('touchmove.calendar-float-ball-drag', event => {
+  $(ballDocument).on('touchmove.calendar-float-ball-drag', event => {
     const point = getTouchClientPoint(event);
     if (!point) {
       return;
@@ -429,11 +432,11 @@ export function bindCalendarWidgetEvents(options: BindCalendarWidgetEventsOption
     options.onBallDragMove(point.clientX, point.clientY);
   });
 
-  $(hostDocument).on('touchend.calendar-float-ball-drag touchcancel.calendar-float-ball-drag', () => {
+  $(ballDocument).on('touchend.calendar-float-ball-drag touchcancel.calendar-float-ball-drag', () => {
     options.onBallDragEnd();
   });
 
-  $(hostDocument).on('mousedown.calendar-float-tools-menu touchstart.calendar-float-tools-menu', event => {
+  $(rootDocument).on('mousedown.calendar-float-tools-menu touchstart.calendar-float-tools-menu', event => {
     const target = event.target as unknown as HTMLElement | null;
     if (!target || target.closest(`#${refs.root?.id || ''} .th-tools-menu`)) {
       return;

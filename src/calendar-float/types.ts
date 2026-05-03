@@ -252,6 +252,7 @@ export interface SelectedDayDetail {
 }
 
 export interface WidgetRefs {
+  iframe: HTMLIFrameElement | null;
   root: HTMLElement | null;
   ball: HTMLButtonElement | null;
   panel: HTMLElement | null;

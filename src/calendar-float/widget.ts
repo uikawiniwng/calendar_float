@@ -64,6 +64,8 @@ const hostWindow =
     ? (window.parent as Window & typeof globalThis)
     : window;
 const hostDocument = hostWindow.document;
+let uiWindow = window as Window & typeof globalThis;
+let uiDocument = window.document;
 const showdownConverterCtor = (() => {
   const maybeShowdown = (
     hostWindow as unknown as {
@@ -103,6 +105,7 @@ const TAG_COLOR_PALETTE: Array<CalendarEventColorStyle & { name: string }> = [
 ];
 
 const refs: WidgetRefs = {
+  iframe: null,
   root: null,
   ball: null,
   panel: null,
@@ -299,7 +302,7 @@ function renderMarkdownContent(markdown: string): string {
 }
 
 function isDesktopMode(): boolean {
-  return isDesktopViewport(hostWindow);
+  return isDesktopViewport(uiWindow);
 }
 
 function getThemeStorageKey(): string {
@@ -359,9 +362,96 @@ function toggleTheme(): void {
   saveTheme();
 }
 
+function ensureIframe(): void {
+  if (refs.iframe?.contentDocument?.body) {
+    uiWindow = refs.iframe.contentWindow as Window & typeof globalThis;
+    uiDocument = refs.iframe.contentDocument;
+    return;
+  }
+
+  const iframe = hostDocument.createElement('iframe');
+  iframe.id = `${ROOT_ID}-frame`;
+  iframe.setAttribute('script_id', getScriptId());
+  iframe.setAttribute('title', '月历悬浮球');
+  iframe.setAttribute('aria-label', '月历悬浮球');
+  iframe.setAttribute('allowtransparency', 'true');
+  iframe.style.position = 'fixed';
+  iframe.style.inset = '0';
+  iframe.style.width = '100vw';
+  iframe.style.height = '100vh';
+  iframe.style.border = '0';
+  iframe.style.background = 'transparent';
+  iframe.style.backgroundColor = 'transparent';
+  iframe.style.pointerEvents = 'none';
+  iframe.style.zIndex = '99999';
+  hostDocument.body.appendChild(iframe);
+
+  const frameDocument = iframe.contentDocument;
+  const frameWindow = iframe.contentWindow as (Window & typeof globalThis) | null;
+  if (!frameDocument || !frameWindow) {
+    throw new Error('无法创建月历悬浮界面的隔离 iframe');
+  }
+
+  frameDocument.open();
+  frameDocument.write(
+    '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><style>html,body{margin:0!important;padding:0!important;background:transparent!important;background-color:transparent!important;}body{overflow:hidden!important;}</style></head><body></body></html>',
+  );
+  frameDocument.close();
+  frameDocument.documentElement.style.setProperty('margin', '0', 'important');
+  frameDocument.documentElement.style.setProperty('padding', '0', 'important');
+  frameDocument.documentElement.style.setProperty('background', 'transparent', 'important');
+  frameDocument.documentElement.style.setProperty('background-color', 'transparent', 'important');
+  frameDocument.body.style.setProperty('margin', '0', 'important');
+  frameDocument.body.style.setProperty('padding', '0', 'important');
+  frameDocument.body.style.setProperty('background', 'transparent', 'important');
+  frameDocument.body.style.setProperty('background-color', 'transparent', 'important');
+  frameDocument.body.style.setProperty('overflow', 'hidden', 'important');
+
+  refs.iframe = iframe;
+  uiWindow = frameWindow;
+  uiDocument = frameDocument;
+}
+
+function syncIframePointerEvents(): void {
+  if (!refs.iframe) {
+    return;
+  }
+
+  refs.iframe.style.pointerEvents = 'auto';
+  if (state.open || uiState.ballDragging) {
+    refs.iframe.style.clipPath = 'inset(0)';
+    return;
+  }
+
+  const ballRect = refs.ball?.getBoundingClientRect();
+  const viewport = getViewportSize({ hostWindow, hostDocument });
+  if (!ballRect || viewport.width <= 0 || viewport.height <= 0) {
+    refs.iframe.style.clipPath = 'inset(0)';
+    return;
+  }
+
+  const margin = 10;
+  const top = Math.max(0, Math.floor(ballRect.top - margin));
+  const right = Math.max(0, Math.floor(viewport.width - ballRect.right - margin));
+  const bottom = Math.max(0, Math.floor(viewport.height - ballRect.bottom - margin));
+  const left = Math.max(0, Math.floor(ballRect.left - margin));
+  refs.iframe.style.clipPath = `inset(${top}px ${right}px ${bottom}px ${left}px)`;
+}
+
+function translateHostPointToUi(clientX: number, clientY: number): { clientX: number; clientY: number } {
+  const rect = refs.iframe?.getBoundingClientRect();
+  if (!rect) {
+    return { clientX, clientY };
+  }
+  return {
+    clientX: clientX - rect.left,
+    clientY: clientY - rect.top,
+  };
+}
+
 function ensureStyle(): void {
-  ensureCalendarWidgetStyle(hostDocument);
-  ensureElliaBetaTicketStyle(hostDocument);
+  ensureCalendarWidgetStyle(uiDocument);
+  ensureElliaBetaTicketStyle(uiDocument);
 }
 
 function ensureRoot(): void {
@@ -369,7 +459,7 @@ function ensureRoot(): void {
     return;
   }
 
-  const root = hostDocument.createElement('div');
+  const root = uiDocument.createElement('div');
   root.id = ROOT_ID;
   root.setAttribute('script_id', getScriptId());
   root.dataset.open = 'false';
@@ -430,7 +520,7 @@ function ensureRoot(): void {
     <dialog class="th-managed-worldbook-dialog-layer" data-role="tag-color-dialog-layer" aria-hidden="true"></dialog>
   `;
 
-  hostDocument.body.appendChild(root);
+  uiDocument.body.appendChild(root);
 
   refs.root = root;
   refs.ball = root.querySelector<HTMLButtonElement>('.th-calendar-ball');
@@ -467,7 +557,7 @@ function syncStateAnchors(): void {
 }
 
 function clampBallPosition(left: number, top: number): { left: number; top: number } {
-  const viewport = getViewportSize({ hostWindow, hostDocument });
+  const viewport = getViewportSize({ hostWindow: uiWindow, hostDocument: uiDocument });
   const ballWidth = refs.ball?.offsetWidth || BALL_DEFAULT_SIZE;
   const ballHeight = refs.ball?.offsetHeight || BALL_DEFAULT_SIZE;
   return {
@@ -485,7 +575,7 @@ function clampBallPosition(left: number, top: number): { left: number; top: numb
 }
 
 function getDefaultBallPosition(): { left: number; top: number } {
-  const viewport = getViewportSize({ hostWindow, hostDocument });
+  const viewport = getViewportSize({ hostWindow: uiWindow, hostDocument: uiDocument });
   return clampBallPosition(viewport.width - BALL_DEFAULT_SIZE - 18, Math.round(viewport.height * 0.32));
 }
 
@@ -532,6 +622,7 @@ function applyBallPosition(): void {
   refs.ball.style.left = `${position.left}px`;
   refs.ball.style.top = `${position.top}px`;
   refs.ball.style.right = 'auto';
+  syncIframePointerEvents();
 }
 
 function restoreBallPosition(): void {
@@ -641,7 +732,7 @@ function updateManagedWorldbookButton(): void {
 function syncDialogLayerOpen(layer: HTMLElement, open: boolean): void {
   layer.dataset.open = open ? 'true' : 'false';
   layer.setAttribute('aria-hidden', open ? 'false' : 'true');
-  if (!(layer instanceof hostWindow.HTMLDialogElement)) {
+  if (!(layer instanceof uiWindow.HTMLDialogElement)) {
     return;
   }
   try {
@@ -1020,7 +1111,7 @@ function revealSidebarOnMobile(): void {
   if (!sideBody) {
     return;
   }
-  hostWindow.requestAnimationFrame(() => {
+  uiWindow.requestAnimationFrame(() => {
     sideBody.scrollTo({ top: 0, behavior: 'smooth' });
   });
 }
@@ -1058,7 +1149,7 @@ function ensureFormTagOption(tag: string): void {
   if (exists) {
     return;
   }
-  const button = hostDocument.createElement('button');
+  const button = uiDocument.createElement('button');
   button.type = 'button';
   button.className = 'th-tag-option';
   button.dataset.action = 'toggle-form-tag';
@@ -1149,7 +1240,7 @@ function ensurePolicyTagOption(field: string, tag: string): void {
   if (exists) {
     return;
   }
-  const button = hostDocument.createElement('button');
+  const button = uiDocument.createElement('button');
   button.type = 'button';
   button.className = 'th-tag-option';
   button.dataset.action = 'toggle-policy-tag';
@@ -1422,7 +1513,7 @@ function scrollActiveBookPageTabIntoView(): void {
   if (!refs.root || !uiState.openedBookId) {
     return;
   }
-  hostWindow.requestAnimationFrame(() => {
+  uiWindow.requestAnimationFrame(() => {
     const tabList = refs.root?.querySelector<HTMLElement>('.th-book-page-tabs');
     const activeTab = tabList?.querySelector<HTMLElement>('.th-book-page-tab.is-active');
     if (!tabList || !activeTab) {
@@ -1449,6 +1540,7 @@ function renderShell(): void {
     return;
   }
 
+  syncIframePointerEvents();
   refs.root.dataset.open = state.open ? 'true' : 'false';
   refs.root.dataset.hasUpcoming = state.reminder.hasUpcoming ? 'true' : 'false';
   refs.root.dataset.tab = uiState.sidebarTab;
@@ -1963,7 +2055,7 @@ function resetPanelPosition(): void {
     }
     return;
   }
-  const viewport = getViewportSize({ hostWindow, hostDocument });
+  const viewport = getViewportSize({ hostWindow: uiWindow, hostDocument: uiDocument });
   if (!refs.panel) {
     return;
   }
@@ -1995,7 +2087,7 @@ function handlePanelDragMove(event: MouseEvent): void {
   if (!uiState.dragging || !refs.panel) {
     return;
   }
-  const viewport = getViewportSize({ hostWindow, hostDocument });
+  const viewport = getViewportSize({ hostWindow: uiWindow, hostDocument: uiDocument });
   const panelWidth = refs.panel.offsetWidth;
   const panelHeight = refs.panel.offsetHeight;
   const nextLeft = clamp(
@@ -2021,22 +2113,25 @@ function handleBallDragStart(clientX: number, clientY: number): void {
   if (!refs.ball || state.open) {
     return;
   }
+  const point = translateHostPointToUi(clientX, clientY);
   const rect = refs.ball.getBoundingClientRect();
   uiState.ballDragging = true;
   uiState.ballMoved = false;
-  uiState.ballDragStartX = clientX;
-  uiState.ballDragStartY = clientY;
+  uiState.ballDragStartX = point.clientX;
+  uiState.ballDragStartY = point.clientY;
   uiState.ballDragOriginLeft = rect.left;
   uiState.ballDragOriginTop = rect.top;
   refs.root?.setAttribute('data-ball-dragging', 'true');
+  syncIframePointerEvents();
 }
 
 function handleBallDragMove(clientX: number, clientY: number): void {
   if (!uiState.ballDragging) {
     return;
   }
-  const deltaX = clientX - uiState.ballDragStartX;
-  const deltaY = clientY - uiState.ballDragStartY;
+  const point = translateHostPointToUi(clientX, clientY);
+  const deltaX = point.clientX - uiState.ballDragStartX;
+  const deltaY = point.clientY - uiState.ballDragStartY;
   if (Math.hypot(deltaX, deltaY) > BALL_DRAG_CLICK_THRESHOLD) {
     uiState.ballMoved = true;
   }
@@ -2052,6 +2147,7 @@ function handleBallDragEnd(): void {
   }
   uiState.ballDragging = false;
   refs.root?.setAttribute('data-ball-dragging', 'false');
+  syncIframePointerEvents();
   if (uiState.ballMoved) {
     uiState.ballSuppressNextClick = true;
     saveBallPosition();
@@ -2061,8 +2157,8 @@ function handleBallDragEnd(): void {
 function bindEvents(): void {
   bindCalendarWidgetEvents({
     refs,
-    hostDocument,
-    hostWindow,
+    hostDocument: uiDocument,
+    hostWindow: hostWindow,
     onToggleBall: () => {
       if (uiState.ballSuppressNextClick) {
         uiState.ballSuppressNextClick = false;
@@ -2266,10 +2362,16 @@ function destroy(reason?: string): void {
     $(refs.root).off('.calendar-float');
     refs.root.remove();
   }
-  $(hostDocument).off('.calendar-float-panel-drag');
-  $(hostDocument).off('.calendar-float-ball-drag');
+  $(uiDocument).off('.calendar-float-panel-drag');
+  $(uiDocument).off('.calendar-float-ball-drag');
+  $(uiDocument).off('.calendar-float-tools-menu');
+  $(uiWindow).off('.calendar-float-window');
   $(hostWindow).off('.calendar-float-window');
-  hostDocument.getElementById(STYLE_ID)?.remove();
+  uiDocument.getElementById(STYLE_ID)?.remove();
+  refs.iframe?.remove();
+  refs.iframe = null;
+  uiWindow = window as Window & typeof globalThis;
+  uiDocument = window.document;
   refs.root = null;
   refs.ball = null;
   refs.panel = null;
@@ -2294,10 +2396,13 @@ function setExternalHostMode(enabled: boolean): void {
   if (refs.root) {
     refs.root.dataset.externalHost = enabled ? 'true' : 'false';
   }
+  syncIframePointerEvents();
 }
 
 export function bootstrapCalendarWidget(): void {
   hostWindow[INSTANCE_KEY]?.destroy('reload');
+  state.destroyed = false;
+  ensureIframe();
   ensureStyle();
   ensureRoot();
   loadTheme();
