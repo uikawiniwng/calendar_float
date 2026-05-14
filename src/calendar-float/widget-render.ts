@@ -11,7 +11,7 @@ import type {
   MonthDayCell,
 } from './types';
 
-export type AgendaSortMode = 'date-asc' | 'date-desc' | 'title-asc';
+export type AgendaSortMode = 'date-asc' | 'date-desc' | 'title-asc' | 'festival-first' | 'event-first';
 
 function escapeWidgetHtml(value: unknown): string {
   return String(value ?? '')
@@ -41,6 +41,51 @@ function buildCustomColorStyle(color?: CalendarEventColorStyle): string {
 function buildCustomColorAttrs(color?: CalendarEventColorStyle): string {
   const style = buildCustomColorStyle(color);
   return style ? ` has-custom-color" style="${style}"` : '"';
+}
+
+function renderInlineMarkerIcon(svg: string): string {
+  const rawSvg = String(svg || '').trim();
+  if (!rawSvg.startsWith('<svg') || !rawSvg.endsWith('</svg>')) {
+    return '<span class="th-corner-marker-dot" aria-hidden="true"></span>';
+  }
+  return rawSvg
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace('<svg ', '<svg class="th-corner-marker-svg" aria-hidden="true" focusable="false" ');
+}
+
+function renderFestivalTitleIcon(svg?: string, iconColor?: string): string {
+  const rawSvg = String(svg || '').trim();
+  const iconHtml =
+    rawSvg.startsWith('<svg') && rawSvg.endsWith('</svg>')
+      ? rawSvg
+          .replace(/<!--[\s\S]*?-->/g, '')
+          .replace('<svg ', '<svg class="th-festival-title-svg" aria-hidden="true" focusable="false" ')
+      : '<span class="th-festival-title-dot" aria-hidden="true"></span>';
+  const style = iconColor ? ` style="--th-festival-icon-color: ${escapeWidgetHtml(iconColor)};"` : '';
+  return `<span class="th-festival-title-icon" aria-hidden="true"${style}>${iconHtml}</span>`;
+}
+
+function buildItemTitleHtml(
+  item: Pick<
+    DailyAgendaItem,
+    'id' | 'source' | 'title' | 'festivalIconSvg' | 'festivalIconColor' | 'festivalLocationLabel' | 'color'
+  >,
+  editingEventId: string | null,
+): string {
+  const editingFlag = buildEditingFlag(item.id, editingEventId);
+  if (item.source !== 'festival') {
+    return `<div class="th-item-title-wrap"><div class="th-item-title">${escapeWidgetHtml(item.title)}</div>${editingFlag}</div>`;
+  }
+  const locationLabel = String(item.festivalLocationLabel || '').trim();
+  const locationStyle = item.color
+    ? ` style="--th-festival-location-bg: ${escapeWidgetHtml(item.color.background)}; --th-festival-location-text: ${escapeWidgetHtml(item.color.text)}; --th-festival-location-border: ${escapeWidgetHtml(item.color.border || item.color.background)};"`
+    : item.festivalIconColor
+      ? ` style="--th-festival-location-bg: ${escapeWidgetHtml(item.festivalIconColor)};"`
+      : '';
+  const locationHtml = locationLabel
+    ? `<span class="th-festival-location-label"${locationStyle} title="${escapeWidgetHtml(locationLabel)}">${escapeWidgetHtml(locationLabel)}</span>`
+    : '';
+  return `<div class="th-item-title-wrap"><div class="th-festival-title-line">${renderFestivalTitleIcon(item.festivalIconSvg, item.festivalIconColor)}<span class="th-item-title">${escapeWidgetHtml(item.title)}</span>${locationHtml}</div>${editingFlag}</div>`;
 }
 
 function buildItemActionButtons(item: Pick<DailyAgendaItem, 'id' | 'type' | 'source'>): string {
@@ -87,7 +132,7 @@ function getBookTitleFontSize(title: string): number {
     Array.from(title).reduce((total, character) => total + (character.charCodeAt(0) <= 0xff ? 0.56 : 1), 0),
     1,
   );
-  return Math.max(8, Math.min(48, Math.floor(760 / visualLength)));
+  return Math.max(22, Math.min(48, Math.floor(760 / visualLength)));
 }
 
 function buildBookFooterControls(pages: CalendarBookPage[], currentPageIndex: number): string {
@@ -131,16 +176,25 @@ function isSameContinuousChip(
   if (!left || !right) {
     return false;
   }
-  return left.title === right.title && left.colorToken === right.colorToken && left.source === right.source;
+  return (
+    left.id === right.id &&
+    left.title === right.title &&
+    left.colorToken === right.colorToken &&
+    left.source === right.source
+  );
 }
 
-function countContinuousChipSpan(week: MonthDayCell[], cellIndex: number, chipIndex: number): number {
-  const chip = week[cellIndex]?.chips[chipIndex];
+function getChipAtRow(cell: MonthDayCell | undefined, row: number): MonthDayCell['chips'][number] | undefined {
+  return cell?.chips.find(chip => chip.row === row);
+}
+
+function countContinuousChipSpan(week: MonthDayCell[], cellIndex: number, row: number): number {
+  const chip = getChipAtRow(week[cellIndex], row);
   if (!chip) {
     return 1;
   }
   let span = 1;
-  while (isSameContinuousChip(chip, week[cellIndex + span]?.chips[chipIndex])) {
+  while (isSameContinuousChip(chip, getChipAtRow(week[cellIndex + span], row))) {
     span += 1;
   }
   return span;
@@ -148,28 +202,70 @@ function countContinuousChipSpan(week: MonthDayCell[], cellIndex: number, chipIn
 
 function renderWeekChipOverlay(week: MonthDayCell[]): string {
   const bars: string[] = [];
-  week.forEach((cell, cellIndex) => {
-    cell.chips.forEach((chip, chipIndex) => {
-      if (isSameContinuousChip(week[cellIndex - 1]?.chips[chipIndex], chip)) {
+  const maxChipRows = Math.max(0, ...week.flatMap(cell => cell.chips.map(chip => chip.row + 1)));
+  for (let row = 0; row < maxChipRows; row += 1) {
+    week.forEach((cell, cellIndex) => {
+      const chip = getChipAtRow(cell, row);
+      if (!chip) {
         return;
       }
-      const span = countContinuousChipSpan(week, cellIndex, chipIndex);
+      if (isSameContinuousChip(getChipAtRow(week[cellIndex - 1], row), chip)) {
+        return;
+      }
+      const span = countContinuousChipSpan(week, cellIndex, row);
+      const lastChip = getChipAtRow(week[cellIndex + span - 1], row);
+      const isBarEnd = Boolean(lastChip?.isEnd);
       const colorClass = chip.color ? ' has-custom-color' : '';
+      const continuityClass = `${chip.isStart ? '' : ' is-continue-left'}${isBarEnd ? '' : ' is-continue-right'}`;
       const customStyle = buildCustomColorStyle(chip.color);
       bars.push(
-        `<div class="th-chip th-week-chip-bar is-${chip.colorToken}${colorClass}" style="grid-column: ${cellIndex + 1} / span ${span}; grid-row: ${chipIndex + 1}; ${customStyle}" title="${escapeWidgetHtml(chip.title)}">${escapeWidgetHtml(chip.title)}</div>`,
+        `<div class="th-chip th-week-chip-bar is-${chip.colorToken}${colorClass}${continuityClass}" style="grid-column: ${cellIndex + 1} / span ${span}; grid-row: ${row + 1}; ${customStyle}" title="${escapeWidgetHtml(chip.title)}">${escapeWidgetHtml(chip.title)}</div>`,
       );
     });
-  });
+  }
   return bars.length ? `<div class="th-week-chip-grid">${bars.join('')}</div>` : '';
+}
+
+function renderDayFestivalMarkers(cell: MonthDayCell): string {
+  if (!cell.markers.length) {
+    return '';
+  }
+  const visibleMarkers = cell.markers.slice(0, 4);
+  const overflowCount = cell.markers.length - visibleMarkers.length;
+  const markerHtml = visibleMarkers
+    .map(marker => {
+      const border = marker.color.border || marker.color.background;
+      const iconColor = marker.iconColor || marker.color.text;
+      const style = `--th-marker-bg: ${escapeWidgetHtml(marker.color.background)}; --th-marker-text: ${escapeWidgetHtml(marker.color.text)}; --th-marker-border: ${escapeWidgetHtml(border)}; --th-marker-icon: ${escapeWidgetHtml(iconColor)};`;
+      return `<span class="th-corner-marker" style="${style}" title="${escapeWidgetHtml(marker.title)}">${renderInlineMarkerIcon(marker.iconSvg)}</span>`;
+    })
+    .join('');
+  const overflowHtml =
+    overflowCount > 0
+      ? `<span class="th-corner-marker th-corner-marker-overflow" title="另有 ${overflowCount} 个节庆">+${overflowCount}</span>`
+      : '';
+  return `<div class="th-day-corner-markers">${markerHtml}${overflowHtml}</div>`;
 }
 
 export function renderCalendarMonthView(options: {
   cells: MonthDayCell[];
   currentMonth: { year: number; month: number; alias?: string };
+  festivalScope: {
+    showAll: boolean;
+    currentLocationText: string;
+    visibleFestivalCount: number;
+    allFestivalCount: number;
+  };
 }): string {
-  const { cells, currentMonth } = options;
+  const { cells, currentMonth, festivalScope } = options;
   const weekRows = chunkWeekRows(cells);
+  const scopeLabel = festivalScope.showAll ? '全部节庆' : '本地节庆';
+  const scopeTitle = festivalScope.showAll
+    ? '正在显示全部节庆；点击后只显示当前位置相关节庆'
+    : festivalScope.currentLocationText
+      ? `当前位置：${festivalScope.currentLocationText}；点击后显示全部节庆`
+      : '未读取到当前位置，当前等同显示全部节庆；点击切换显示模式';
+  const scopeCount = `${festivalScope.visibleFestivalCount}/${festivalScope.allFestivalCount}`;
   return `
     <div class="th-month-view">
       <section class="th-month-header">
@@ -177,6 +273,10 @@ export function renderCalendarMonthView(options: {
           <div class="th-month-title">${escapeWidgetHtml(formatCalendarMonthTitle(currentMonth.year, currentMonth.month, currentMonth.alias))}</div>
         </div>
         <div class="th-month-actions">
+          <button type="button" class="th-btn th-festival-scope-btn${festivalScope.showAll ? ' is-showing-all' : ''}" data-action="toggle-festival-scope" aria-pressed="${festivalScope.showAll ? 'true' : 'false'}" title="${escapeWidgetHtml(scopeTitle)}">
+            <span>${escapeWidgetHtml(scopeLabel)}</span>
+            <span class="th-festival-scope-count">${escapeWidgetHtml(scopeCount)}</span>
+          </button>
           <button type="button" class="th-btn" data-action="month-prev">上个月</button>
           <button type="button" class="th-btn" data-action="month-today">回到本月</button>
           <button type="button" class="th-btn" data-action="month-next">下个月</button>
@@ -189,7 +289,10 @@ export function renderCalendarMonthView(options: {
             .map(week => {
               const weekChipRows = Math.max(
                 1,
-                ...week.map(cell => cell.chips.length + (cell.overflowCount > 0 ? 1 : 0)),
+                ...week.map(cell => {
+                  const visibleRows = cell.chips.reduce((maxRow, chip) => Math.max(maxRow, chip.row + 1), 0);
+                  return visibleRows + (cell.overflowCount > 0 ? 1 : 0);
+                }),
               );
               return `<div class="th-week-block" style="--th-week-chip-rows: ${weekChipRows};"><div class="th-week-days">${week
                 .map(cell => {
@@ -203,7 +306,7 @@ export function renderCalendarMonthView(options: {
                   if (cell.isSelected) {
                     classes.push('is-selected');
                   }
-                  return `<button type="button" class="${classes.join(' ')}" data-action="pick-day" data-date-key="${escapeWidgetHtml(cell.key)}"><div class="th-day-head"><span class="th-day-number">${cell.day}</span></div><div class="th-day-meta">${cell.overflowCount > 0 ? `<div class="th-overflow">+${cell.overflowCount} 条</div>` : ''}</div></button>`;
+                  return `<button type="button" class="${classes.join(' ')}" data-action="pick-day" data-date-key="${escapeWidgetHtml(cell.key)}">${renderDayFestivalMarkers(cell)}<div class="th-day-head"><span class="th-day-number">${cell.day}</span></div><div class="th-day-meta">${cell.overflowCount > 0 ? `<div class="th-overflow">+${cell.overflowCount} 条</div>` : ''}</div></button>`;
                 })
                 .join('')}</div>${renderWeekChipOverlay(week)}</div>`;
             })
@@ -261,21 +364,74 @@ function buildItemClockMeta(item: Pick<DailyAgendaItem, 'startText' | 'endText'>
   return clockText ? `<div class="${className}">${escapeWidgetHtml(clockText)}</div>` : '';
 }
 
+function buildItemPeriodMeta(item: Pick<DailyAgendaItem, 'periodLabel'>, className: string): string {
+  return item.periodLabel ? `<div class="${className}">${escapeWidgetHtml(item.periodLabel)}</div>` : '';
+}
+
 function matchesAgendaKeyword(item: DailyAgendaItem, keyword: string): boolean {
   if (!keyword) {
     return true;
   }
-  const haystack = [item.title, item.summary, item.stageTitle || '', item.tags.join(' ')].join(' ').toLowerCase();
+  const haystack = [item.title, item.summary, item.periodLabel || '', item.stageTitle || '', item.tags.join(' ')]
+    .join(' ')
+    .toLowerCase();
   return haystack.includes(keyword);
+}
+
+function getAgendaItemSourceRank(item: DailyAgendaItem, agendaSort: AgendaSortMode): number {
+  if (agendaSort === 'event-first') {
+    if (item.source === 'active') {
+      return 0;
+    }
+    if (item.source === 'archive') {
+      return 1;
+    }
+    return 2;
+  }
+  if (agendaSort === 'festival-first') {
+    if (item.source === 'festival') {
+      return 0;
+    }
+    if (item.source === 'active') {
+      return 1;
+    }
+    return 2;
+  }
+  return 0;
+}
+
+function compareAgendaItems(left: DailyAgendaItem, right: DailyAgendaItem, agendaSort: AgendaSortMode): number {
+  if (agendaSort === 'festival-first' || agendaSort === 'event-first') {
+    const sourceOrder = getAgendaItemSourceRank(left, agendaSort) - getAgendaItemSourceRank(right, agendaSort);
+    if (sourceOrder !== 0) {
+      return sourceOrder;
+    }
+  }
+
+  if (left.isPeriod !== right.isPeriod) {
+    return left.isPeriod ? -1 : 1;
+  }
+
+  if (agendaSort === 'title-asc') {
+    const titleOrder = left.title.localeCompare(right.title, 'zh-CN');
+    if (titleOrder !== 0) {
+      return titleOrder;
+    }
+  }
+
+  const leftDate = String(left.sortStartKey || left.dateKey);
+  const rightDate = String(right.sortStartKey || right.dateKey);
+  const dateOrder = agendaSort === 'date-desc' ? rightDate.localeCompare(leftDate) : leftDate.localeCompare(rightDate);
+  if (dateOrder !== 0) {
+    return dateOrder;
+  }
+  return left.title.localeCompare(right.title, 'zh-CN');
 }
 
 function sortAgendaGroups(groups: DailyAgendaGroup[], agendaSort: AgendaSortMode): DailyAgendaGroup[] {
   const nextGroups = groups.map(group => ({
     ...group,
-    items:
-      agendaSort === 'title-asc'
-        ? [...group.items].sort((left, right) => left.title.localeCompare(right.title, 'zh-CN'))
-        : group.items,
+    items: [...group.items].sort((left, right) => compareAgendaItems(left, right, agendaSort)),
   }));
 
   if (agendaSort === 'date-desc') {
@@ -328,6 +484,8 @@ export function renderAgendaPanel(options: {
           <option value="date-asc" ${agendaSort === 'date-asc' ? 'selected' : ''}>日期升序</option>
           <option value="date-desc" ${agendaSort === 'date-desc' ? 'selected' : ''}>日期降序</option>
           <option value="title-asc" ${agendaSort === 'title-asc' ? 'selected' : ''}>标题排序</option>
+          <option value="festival-first" ${agendaSort === 'festival-first' ? 'selected' : ''}>节庆优先</option>
+          <option value="event-first" ${agendaSort === 'event-first' ? 'selected' : ''}>LLM事件优先</option>
         </select>
       </div>
     </section>
@@ -346,10 +504,14 @@ export function renderAgendaPanel(options: {
                     if (isEditingItem(item.id, editingEventId)) {
                       classes.push('is-editing');
                     }
-                    return `<article class="${classes.join(' ')}${buildCustomColorAttrs(item.color)} data-action="open-agenda-item-date" data-date-key="${escapeWidgetHtml(item.dateKey)}"><div class="th-item-top"><div class="th-item-title-wrap"><div class="th-item-title">${escapeWidgetHtml(item.title)}</div>${buildEditingFlag(item.id, editingEventId)}</div>${actionButtons}</div>${item.stageTitle ? `<div class="th-item-stage">${escapeWidgetHtml(item.stageTitle)}</div>` : ''}${buildItemClockMeta(item, 'th-item-time')}<div class="th-item-summary">${escapeWidgetHtml(item.summary || '（无详情）')}</div>${tags}</article>`;
+                    return `<article class="${classes.join(' ')}${buildCustomColorAttrs(item.color)} data-action="open-agenda-item-date" data-date-key="${escapeWidgetHtml(item.dateKey)}"><div class="th-item-top">${buildItemTitleHtml(item, editingEventId)}${actionButtons}</div>${item.stageTitle ? `<div class="th-item-stage">${escapeWidgetHtml(item.stageTitle)}</div>` : ''}${buildItemPeriodMeta(item, 'th-item-time')}${buildItemClockMeta(item, 'th-item-time')}<div class="th-item-summary">${escapeWidgetHtml(item.summary || '（无详情）')}</div>${tags}</article>`;
                   })
                   .join('');
-                return `<section class="th-agenda-group"><div class="th-agenda-date">${escapeWidgetHtml(group.label)}</div>${items}</section>`;
+                const shouldHideSingleMonthTitle = filteredGroups.length === 1 && /\d+月事件$/.test(group.label);
+                const groupTitle = shouldHideSingleMonthTitle
+                  ? ''
+                  : `<div class="th-agenda-date">${escapeWidgetHtml(group.label)}</div>`;
+                return `<section class="th-agenda-group">${groupTitle}${items}</section>`;
               })
               .join('')
           : '<div class="th-empty">当前筛选条件下没有匹配事件。</div>'
@@ -408,7 +570,7 @@ export function renderDetailPanel(options: {
       if (isEditingItem(item.id, editingEventId)) {
         classes.push('is-editing');
       }
-      return `<article class="${classes.join(' ')}${buildCustomColorAttrs(item.color)}><div class="th-item-top"><div class="th-item-title-wrap"><div class="th-item-title">${escapeWidgetHtml(item.title)}</div>${buildEditingFlag(item.id, editingEventId)}</div>${buildItemActionButtons(item)}</div>${item.stageTitle ? `<div class="th-item-stage">${escapeWidgetHtml(item.stageTitle)}</div>` : ''}${buildItemClockMeta(item, 'th-detail-meta')}<div class="th-detail-summary">${escapeWidgetHtml(item.summary || '（无详情）')}</div>${tags}${books ? `<div class="th-detail-books">${books}</div>` : ''}</article>`;
+      return `<article class="${classes.join(' ')}${buildCustomColorAttrs(item.color)}><div class="th-item-top">${buildItemTitleHtml(item, editingEventId)}${buildItemActionButtons(item)}</div>${item.stageTitle ? `<div class="th-item-stage">${escapeWidgetHtml(item.stageTitle)}</div>` : ''}${buildItemPeriodMeta(item, 'th-detail-meta')}${buildItemClockMeta(item, 'th-detail-meta')}<div class="th-detail-summary">${escapeWidgetHtml(item.summary || '（无详情）')}</div>${tags}${books ? `<div class="th-detail-books">${books}</div>` : ''}</article>`;
     })
     .join('');
   return `${addonHtml}<section class="th-side-section">${cards}</section>`;

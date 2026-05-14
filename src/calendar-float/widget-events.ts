@@ -1,7 +1,7 @@
 import type { WidgetRefs } from './types';
 
 type SidebarTab = 'detail' | 'form' | 'archive';
-type AgendaSortMode = 'date-asc' | 'date-desc' | 'title-asc';
+type AgendaSortMode = 'date-asc' | 'date-desc' | 'title-asc' | 'festival-first' | 'event-first';
 type CalendarBucketType = '临时' | '重复';
 
 export interface BindCalendarWidgetEventsOptions {
@@ -14,12 +14,15 @@ export interface BindCalendarWidgetEventsOptions {
   onBallDragEnd: () => void;
   onClosePanel: () => void;
   onReload: () => void | Promise<void>;
+  onTogglePanelFullscreen: () => void;
   onToggleTheme: () => void;
+  onToggleFestivalScope: () => void;
   onOpenTagColorPanel: () => void;
   onCloseTagColorPanel: () => void;
   onManagedWorldbookClick: () => void | Promise<void>;
   onSwitchTab: (tab: SidebarTab) => void;
   onOpenCreateForm: () => void;
+  onOpenMobileAgenda: () => void;
   onCloseMobileSide: () => void;
   onCancelForm: () => void;
   onFillNowTime: () => void | Promise<void>;
@@ -73,7 +76,9 @@ function parseSidebarTab(value: string): SidebarTab {
 }
 
 function parseAgendaSort(value: string): AgendaSortMode {
-  return value === 'date-desc' || value === 'title-asc' ? value : 'date-asc';
+  return value === 'date-desc' || value === 'title-asc' || value === 'festival-first' || value === 'event-first'
+    ? value
+    : 'date-asc';
 }
 
 function parseCalendarBucketType(value: string): CalendarBucketType {
@@ -128,8 +133,16 @@ export function bindCalendarWidgetEvents(options: BindCalendarWidgetEventsOption
     void options.onReload();
   });
 
+  $(refs.root).on('click.calendar-float', '[data-action="toggle-panel-fullscreen"]', () => {
+    options.onTogglePanelFullscreen();
+  });
+
   $(refs.root).on('click.calendar-float', '[data-action="toggle-theme"]', () => {
     options.onToggleTheme();
+  });
+
+  $(refs.root).on('click.calendar-float', '[data-action="toggle-festival-scope"]', () => {
+    options.onToggleFestivalScope();
   });
 
   $(refs.root).on('click.calendar-float', '[data-action="open-tag-color-panel"]', () => {
@@ -160,6 +173,10 @@ export function bindCalendarWidgetEvents(options: BindCalendarWidgetEventsOption
 
   $(refs.root).on('click.calendar-float', '[data-action="open-create-form"]', () => {
     options.onOpenCreateForm();
+  });
+
+  $(refs.root).on('click.calendar-float', '[data-action="open-mobile-agenda"]', () => {
+    options.onOpenMobileAgenda();
   });
 
   $(refs.root).on('click.calendar-float', '[data-action="focus-agenda-filter"]', () => {

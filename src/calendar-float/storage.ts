@@ -10,7 +10,7 @@ import {
 } from './constants';
 import { formatDateKey, parseWorldDateAnchor } from './date';
 import { sanitizeBucketRecords, sanitizeRawEvent, sanitizeTagList } from './event-normalizer';
-import { getCalendarWorldTimePath } from './runtime-config';
+import { getCalendarWorldLocationPath, getCalendarWorldTimePath } from './runtime-config';
 import type {
   ActiveCalendarBuckets,
   ArchivedCalendarEvent,
@@ -619,6 +619,24 @@ export function readCurrentWorldTime(path = getCalendarWorldTimePath()): {
           }
         : null,
   };
+}
+
+function formatWorldLocationValue(value: unknown): string {
+  if (Array.isArray(value)) {
+    return value.map(formatWorldLocationValue).filter(Boolean).join(' / ');
+  }
+  if (_.isPlainObject(value)) {
+    return Object.values(value as Record<string, unknown>)
+      .map(formatWorldLocationValue)
+      .filter(Boolean)
+      .join(' / ');
+  }
+  return String(value ?? '').trim();
+}
+
+export function readCurrentWorldLocation(path = getCalendarWorldLocationPath()): string {
+  const messageData = readMessageVariableData();
+  return formatWorldLocationValue(_.get(messageData, path, ''));
 }
 
 export function buildSuggestionSet(args: {

@@ -6,9 +6,17 @@ import {
   renderElliaBetaTicketBookView,
   renderElliaTicketAddOnForDate,
 } from '../dlc_ellia';
-import { buildDailyAgenda, buildMonthCells, buildReminderState } from './calendar-view-model';
+import {
+  MONTH_EVENT_ROW_LIMIT,
+  buildDailyAgenda,
+  buildFestivalEventsForRange,
+  buildMonthAgenda,
+  buildMonthCells,
+  buildReminderState,
+} from './calendar-view-model';
 import { INSTANCE_KEY, ROOT_ID, SCRIPT_NAME, STYLE_ID } from './constants';
-import { formatDateKey } from './date';
+import { addDays, compareDatePoint, formatDateKey } from './date';
+import { buildFestivalMarker, getFestivalLocationKeywords } from './festival-visual';
 import { saveCalendarForm } from './form-service';
 import { buildSelectedDayDetail, fallbackDateLabel, renderFormHtml } from './render';
 import { loadCalendarDatasetFromRuntimeWorldbook } from './runtime-ui-dataset';
@@ -27,11 +35,15 @@ import {
 } from './storage';
 import type {
   CalendarArchivePolicy,
+  CalendarDataset,
   CalendarEventColorStyle,
+  CalendarEventRecord,
   CalendarMonthAliasRecord,
   DailyAgendaGroup,
   DailyAgendaItem,
   DatePoint,
+  DateRange,
+  FestivalRecord,
   MonthDayCell,
   ReminderState,
   WidgetRefs,
@@ -45,6 +57,7 @@ import {
   renderBookMainView as renderBookMainViewExternal,
   renderCalendarMonthView,
   renderDetailPanel as renderDetailPanelExternal,
+  type AgendaSortMode,
 } from './widget-render';
 import { ensureCalendarWidgetStyle } from './widget-style';
 import {
@@ -132,7 +145,7 @@ const state: WidgetState = {
 let monthAliases: CalendarMonthAliasRecord[] = [];
 
 const BALL_POSITION_VAR_KEY = 'calendar_float_ball_position';
-const BALL_DEFAULT_SIZE = 56;
+const BALL_DEFAULT_SIZE = 68;
 const BALL_VIEWPORT_MARGIN = 8;
 const BALL_DRAG_CLICK_THRESHOLD = 4;
 
@@ -140,6 +153,7 @@ const uiState = {
   sidebarTab: 'detail' as SidebarTab,
   panelLeft: null as number | null,
   panelTop: null as number | null,
+  panelFullscreen: false,
   dragging: false,
   dragStartX: 0,
   dragStartY: 0,
@@ -157,7 +171,8 @@ const uiState = {
   openedBookId: null as string | null,
   openedBookPageIndex: 0,
   theme: 'light' as 'light' | 'dark',
-  agendaSort: 'date-asc' as 'date-asc' | 'date-desc' | 'title-asc',
+  agendaSort: 'date-asc' as AgendaSortMode,
+  showAllFestivals: false,
   mobileSideOpen: false,
   managedWorldbookBusy: false,
   managedWorldbookDialogOpen: false,
@@ -467,6 +482,7 @@ function ensureRoot(): void {
   root.dataset.tab = uiState.sidebarTab;
   root.dataset.theme = uiState.theme;
   root.dataset.mobileSideOpen = 'false';
+  root.dataset.panelFullscreen = 'false';
   root.dataset.tagColorOpen = 'false';
   root.dataset.externalHost = 'false';
   root.dataset.managedWorldbookConnectivity = 'unknown';
@@ -478,17 +494,17 @@ function ensureRoot(): void {
           <div class="th-main-head" data-drag-handle="panel">
             <details class="th-tools-menu th-tools-menu--left">
               <summary class="th-btn th-menu-status-btn" title="设置菜单" aria-label="设置菜单">
-                <span class="th-status-light-only" aria-hidden="true"></span>
               </summary>
               <div class="th-tool-menu-panel" role="menu" aria-label="设置菜单">
                 <button type="button" class="th-tool-menu-item" data-action="toggle-theme" role="menuitem">主题颜色</button>
                 <button type="button" class="th-tool-menu-item" data-action="open-tag-color-panel" role="menuitem">标签颜色</button>
-                <button type="button" class="th-tool-menu-item th-connectivity-button" data-action="managed-worldbook-connectivity" data-state="unknown" role="menuitem" aria-label="更多设置">
-                  <span class="th-connectivity-text">更多设置</span>
+                <button type="button" class="th-tool-menu-item th-connectivity-button" data-action="managed-worldbook-connectivity" data-state="unknown" role="menuitem" aria-label="侦错模式">
+                  <span class="th-connectivity-text">侦错模式</span>
                 </button>
               </div>
             </details>
             <div class="th-window-actions" aria-label="窗口操作">
+              <button type="button" class="th-btn" data-action="toggle-panel-fullscreen" title="全屏" aria-label="全屏" aria-pressed="false">□</button>
               <button type="button" class="th-btn" data-action="reload" title="刷新" aria-label="刷新">↻</button>
               <button type="button" class="th-btn" data-action="close" title="关闭" aria-label="关闭">×</button>
             </div>
@@ -500,7 +516,7 @@ function ensureRoot(): void {
             <div class="th-side-head-copy">
               <div class="th-side-title">本月事件</div>
             </div>
-            <button type="button" class="th-btn th-mobile-side-close" data-action="close-mobile-side" aria-label="收起下方面板">⌄</button>
+            <button type="button" class="th-btn th-mobile-side-close" data-action="close-mobile-side" aria-label="返回月历">返回月历</button>
           </div>
           <div class="th-sidebar-tabs">
             <button type="button" class="th-tab-button" data-action="switch-tab" data-tab="detail">日期详情</button>
@@ -513,6 +529,7 @@ function ensureRoot(): void {
             <div class="th-side-panel is-form" data-role="form-panel"></div>
           </div>
         </aside>
+        <button type="button" class="th-btn th-fab-list" data-action="open-mobile-agenda" aria-label="打开本月列表">≡</button>
         <button type="button" class="th-btn th-fab-add" data-action="open-create-form" aria-label="新增事件">+</button>
       </div>
     </section>
@@ -637,8 +654,38 @@ function applyPanelPosition(): void {
   if (!refs.panel || !isDesktopMode()) {
     return;
   }
+  if (uiState.panelFullscreen) {
+    refs.panel.style.left = '';
+    refs.panel.style.top = '';
+    return;
+  }
   refs.panel.style.left = `${uiState.panelLeft}px`;
   refs.panel.style.top = `${uiState.panelTop}px`;
+}
+
+function updatePanelFullscreenButton(): void {
+  const button = refs.root?.querySelector<HTMLButtonElement>('[data-action="toggle-panel-fullscreen"]');
+  if (!button) {
+    return;
+  }
+  const fullscreen = uiState.panelFullscreen;
+  button.textContent = fullscreen ? '↙' : '□';
+  button.title = fullscreen ? '还原窗口' : '全屏';
+  button.setAttribute('aria-label', fullscreen ? '还原窗口' : '全屏');
+  button.setAttribute('aria-pressed', fullscreen ? 'true' : 'false');
+}
+
+function setPanelFullscreen(fullscreen: boolean): void {
+  if (!isDesktopMode()) {
+    uiState.panelFullscreen = false;
+    return;
+  }
+  uiState.panelFullscreen = fullscreen;
+  if (fullscreen && refs.panel) {
+    refs.panel.style.left = '';
+    refs.panel.style.top = '';
+  }
+  renderShell();
 }
 
 function buildManagedWorldbookSummaryLines(diagnostics: CalendarManagedWorldbookDiagnostics): string[] {
@@ -689,7 +736,7 @@ function buildManagedWorldbookSourceHtml(diagnostics: CalendarManagedWorldbookDi
 }
 
 /**
- * UI 入口保持为“更多设置”；正常状态不在菜单按钮上显示后端诊断，只在弹窗内展示调试信息。
+ * UI 入口保持为“侦错模式”；正常状态不在菜单按钮上显示后端诊断，只在弹窗内展示调试信息。
  */
 function getConnectivityButtonCopy(diagnostics: CalendarManagedWorldbookDiagnostics): {
   text: string;
@@ -701,9 +748,9 @@ function getConnectivityButtonCopy(diagnostics: CalendarManagedWorldbookDiagnost
       ? '正在检查世界书后端条目'
       : diagnostics.connectivity === 'error'
         ? `世界书后端检查失败；当前 ${installedText}`
-        : `打开更多设置；世界书后端 ${installedText}`;
+        : `打开侦错模式；世界书后端 ${installedText}`;
   return {
-    text: uiState.managedWorldbookBusy ? '更多设置…' : '更多设置',
+    text: uiState.managedWorldbookBusy ? '侦错模式…' : '侦错模式',
     title: stateText,
   };
 }
@@ -786,7 +833,7 @@ function renderManagedWorldbookDialog(): void {
   const uninstallDisabled = diagnostics.managedEntryCount <= 0;
   const sourceHtml = buildManagedWorldbookSourceHtml(diagnostics);
 
-  let title = '更多设置';
+  let title = '侦错模式';
   let description =
     '这里显示脚本实际读到的 event / book / utility 来源与后端诊断。正常使用时不需要操作；重装/卸载仅作为 debug/dev 工具。';
   let bodyHtml = '';
@@ -1394,13 +1441,311 @@ function getCurrentMonthAlias(): string {
   return String(monthAliases.find(item => item.month === state.currentMonth.month)?.label || '').trim();
 }
 
-function renderMonthView(cells: MonthDayCell[]): string {
+function normalizeLocationMatchText(value: string): string {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '');
+}
+
+function splitLocationTerms(value: string): string[] {
+  return String(value || '')
+    .split(/[，,、;；/|>\\\n\r\t -]+/)
+    .map(item => item.trim())
+    .filter(Boolean);
+}
+
+function isLocationMatch(left: string, right: string): boolean {
+  const normalizedLeft = normalizeLocationMatchText(left);
+  const normalizedRight = normalizeLocationMatchText(right);
+  if (!normalizedLeft || !normalizedRight) {
+    return false;
+  }
+  return normalizedLeft.includes(normalizedRight) || normalizedRight.includes(normalizedLeft);
+}
+
+function buildLocalFestivalSearchTerms(dataset: CalendarDataset): string[] {
+  const terms = new Set<string>(
+    [dataset.currentLocationText, ...splitLocationTerms(dataset.currentLocationText)].filter(Boolean),
+  );
+  if (terms.size === 0) {
+    return [];
+  }
+
+  let changed = true;
+  while (changed) {
+    changed = false;
+    dataset.festivals.forEach(festival => {
+      const keywords = getFestivalLocationKeywords(festival);
+      if (
+        !keywords.length ||
+        !keywords.some(keyword => Array.from(terms).some(term => isLocationMatch(term, keyword)))
+      ) {
+        return;
+      }
+      keywords.forEach(keyword => {
+        if (!terms.has(keyword)) {
+          terms.add(keyword);
+          changed = true;
+        }
+      });
+    });
+  }
+
+  return Array.from(terms);
+}
+
+function isFestivalVisibleInLocalScope(festival: FestivalRecord, localTerms: string[]): boolean {
+  const keywords = getFestivalLocationKeywords(festival);
+  if (!keywords.length || localTerms.length === 0) {
+    return true;
+  }
+  return keywords.some(keyword => localTerms.some(term => isLocationMatch(term, keyword)));
+}
+
+function getVisibleCalendarDataset(): CalendarDataset | null {
+  if (!state.dataset) {
+    return null;
+  }
+  if (uiState.showAllFestivals) {
+    return state.dataset;
+  }
+  const localTerms = buildLocalFestivalSearchTerms(state.dataset);
+  if (!localTerms.length) {
+    return state.dataset;
+  }
+  return {
+    ...state.dataset,
+    festivals: state.dataset.festivals.filter(festival => isFestivalVisibleInLocalScope(festival, localTerms)),
+  };
+}
+
+function getLocalFestivalIds(dataset: CalendarDataset): Set<string> {
+  const localTerms = buildLocalFestivalSearchTerms(dataset);
+  if (!localTerms.length) {
+    return new Set(dataset.festivals.map(festival => festival.id));
+  }
+  return new Set(
+    dataset.festivals
+      .filter(festival => isFestivalVisibleInLocalScope(festival, localTerms))
+      .map(festival => festival.id),
+  );
+}
+
+function getMonthBarDataset(visibleDataset: CalendarDataset): CalendarDataset {
+  if (!state.dataset || !uiState.showAllFestivals) {
+    return visibleDataset;
+  }
+  const localFestivalIds = getLocalFestivalIds(state.dataset);
+  return {
+    ...visibleDataset,
+    festivals: visibleDataset.festivals.filter(festival => localFestivalIds.has(festival.id)),
+  };
+}
+
+function clampDatePoint(point: DatePoint, range: DateRange): DatePoint {
+  if (compareDatePoint(point, range.start) < 0) {
+    return range.start;
+  }
+  if (compareDatePoint(point, range.end) > 0) {
+    return range.end;
+  }
+  return point;
+}
+
+function isMultiDayRange(range: DateRange): boolean {
+  return compareDatePoint(range.start, range.end) < 0;
+}
+
+function getVisibleRangeDayLength(range: DateRange): number {
+  let length = 1;
+  let cursor = range.start;
+  while (compareDatePoint(cursor, range.end) < 0) {
+    length += 1;
+    cursor = addDays(cursor, 1);
+  }
+  return length;
+}
+
+function compareCompactFestivalBars(left: CalendarEventRecord, right: CalendarEventRecord): number {
+  if (left.range && right.range) {
+    const startOrder = compareDatePoint(left.range.start, right.range.start);
+    if (startOrder !== 0) {
+      return startOrder;
+    }
+    const lengthOrder = getVisibleRangeDayLength(right.range) - getVisibleRangeDayLength(left.range);
+    if (lengthOrder !== 0) {
+      return lengthOrder;
+    }
+  }
+  return left.title.localeCompare(right.title, 'zh-CN') || left.id.localeCompare(right.id);
+}
+
+function findWeekCellIndex(week: MonthDayCell[], point: DatePoint): number {
+  return week.findIndex(cell => cell.year === point.year && cell.month === point.month && cell.day === point.day);
+}
+
+function rangesOverlap(left: DateRange, right: DateRange): boolean {
+  return compareDatePoint(left.start, right.end) <= 0 && compareDatePoint(left.end, right.start) >= 0;
+}
+
+function clampRangeToBoundary(range: DateRange, boundary: DateRange): DateRange | null {
+  if (!rangesOverlap(range, boundary)) {
+    return null;
+  }
+  return {
+    start: compareDatePoint(range.start, boundary.start) < 0 ? boundary.start : range.start,
+    end: compareDatePoint(range.end, boundary.end) > 0 ? boundary.end : range.end,
+  };
+}
+
+function addCompactFestivalBars(cells: MonthDayCell[], events: CalendarEventRecord[]): void {
+  if (!cells.length || !events.length) {
+    return;
+  }
+
+  for (let weekStart = 0; weekStart < cells.length; weekStart += 7) {
+    const week = cells.slice(weekStart, weekStart + 7);
+    const first = week[0];
+    const last = week[week.length - 1];
+    if (!first || !last) {
+      continue;
+    }
+
+    const weekRange: DateRange = {
+      start: { year: first.year, month: first.month, day: first.day },
+      end: { year: last.year, month: last.month, day: last.day },
+    };
+    const rowOccupancy = Array.from({ length: MONTH_EVENT_ROW_LIMIT }, () => Array(week.length).fill(false));
+    week.forEach((cell, cellIndex) => {
+      cell.chips.forEach(chip => {
+        if (chip.row >= 0 && chip.row < MONTH_EVENT_ROW_LIMIT) {
+          rowOccupancy[chip.row][cellIndex] = true;
+        }
+      });
+    });
+
+    events
+      .filter(event => event.range && rangesOverlap(event.range, weekRange))
+      .sort(compareCompactFestivalBars)
+      .forEach(event => {
+        if (!event.range) {
+          return;
+        }
+        const clamped = clampRangeToBoundary(event.range, weekRange);
+        if (!clamped) {
+          return;
+        }
+        const startIndex = findWeekCellIndex(week, clamped.start);
+        const endIndex = findWeekCellIndex(week, clamped.end);
+        if (startIndex < 0 || endIndex < startIndex) {
+          return;
+        }
+        const row = rowOccupancy.findIndex(occupied =>
+          occupied.slice(startIndex, endIndex + 1).every(value => !value),
+        );
+        if (row < 0) {
+          for (let index = startIndex; index <= endIndex; index += 1) {
+            week[index].overflowCount += 1;
+          }
+          return;
+        }
+
+        for (let index = startIndex; index <= endIndex; index += 1) {
+          rowOccupancy[row][index] = true;
+          const cell = week[index];
+          cell.chips.push({
+            id: event.id,
+            title: event.title,
+            row,
+            startOffset: 0,
+            endOffset: 0,
+            isStart: compareDatePoint({ year: cell.year, month: cell.month, day: cell.day }, event.range.start) === 0,
+            isEnd: compareDatePoint({ year: cell.year, month: cell.month, day: cell.day }, event.range.end) === 0,
+            source: event.source,
+            colorToken: 'festival',
+            color: event.color,
+          });
+        }
+      });
+  }
+
+  cells.forEach(cell => {
+    cell.chips.sort((left, right) => left.row - right.row || left.title.localeCompare(right.title, 'zh-CN'));
+  });
+}
+
+function addCompactFestivalMarkers(
+  cells: MonthDayCell[],
+  markerDataset: CalendarDataset,
+  barDataset: CalendarDataset,
+): void {
+  if (!cells.length) {
+    return;
+  }
+  const barFestivalIds = new Set(barDataset.festivals.map(festival => festival.id));
+  const compactFestivals = markerDataset.festivals.filter(festival => !barFestivalIds.has(festival.id));
+  if (!compactFestivals.length) {
+    return;
+  }
+
+  const range: DateRange = {
+    start: { year: cells[0].year, month: cells[0].month, day: cells[0].day },
+    end: {
+      year: cells[cells.length - 1].year,
+      month: cells[cells.length - 1].month,
+      day: cells[cells.length - 1].day,
+    },
+  };
+  const cellsByKey = new Map(cells.map(cell => [cell.key, cell]));
+  const festivalById = new Map(compactFestivals.map(festival => [festival.id, festival]));
+  const compactEvents = buildFestivalEventsForRange(compactFestivals, range);
+  addCompactFestivalBars(
+    cells,
+    compactEvents.filter(event => event.range && isMultiDayRange(event.range)),
+  );
+
+  compactEvents.forEach((event: CalendarEventRecord) => {
+    if (!event.range) {
+      return;
+    }
+    if (isMultiDayRange(event.range)) {
+      return;
+    }
+    const festival = festivalById.get(event.id);
+    if (!festival) {
+      return;
+    }
+    const marker = buildFestivalMarker(festival);
+    let cursor = clampDatePoint(event.range.start, range);
+    const end = clampDatePoint(event.range.end, range);
+    while (compareDatePoint(cursor, end) <= 0) {
+      const cell = cellsByKey.get(formatDateKey(cursor));
+      if (cell && !cell.markers.some(item => item.id === marker.id)) {
+        cell.markers.push(marker);
+      }
+      cursor = addDays(cursor, 1);
+    }
+  });
+
+  cells.forEach(cell => {
+    cell.markers.sort((left, right) => left.title.localeCompare(right.title, 'zh-CN'));
+  });
+}
+
+function renderMonthView(cells: MonthDayCell[], visibleDataset: CalendarDataset): string {
   return renderCalendarMonthView({
     cells,
     currentMonth: {
       year: state.currentMonth.year,
       month: state.currentMonth.month,
       alias: getCurrentMonthAlias(),
+    },
+    festivalScope: {
+      showAll: uiState.showAllFestivals,
+      currentLocationText: state.dataset?.currentLocationText ?? '',
+      visibleFestivalCount: visibleDataset.festivals.length,
+      allFestivalCount: state.dataset?.festivals.length ?? visibleDataset.festivals.length,
     },
   });
 }
@@ -1417,20 +1762,11 @@ function renderBookMainView(bookId: string): string {
   });
 }
 
-function getCurrentMonthAgendaGroups(): DailyAgendaGroup[] {
-  if (!state.dataset) {
+function getCurrentMonthAgendaGroups(dataset: CalendarDataset | null): DailyAgendaGroup[] {
+  if (!dataset) {
     return [];
   }
-  const dayCount = new Date(state.currentMonth.year, state.currentMonth.month, 0).getDate();
-  return buildDailyAgenda(
-    state.dataset,
-    formatDateKey({
-      year: state.currentMonth.year,
-      month: state.currentMonth.month,
-      day: 1,
-    }),
-    dayCount,
-  );
+  return buildMonthAgenda(dataset, state.currentMonth);
 }
 
 function renderAgendaPanel(groups: DailyAgendaGroup[]): string {
@@ -1541,15 +1877,19 @@ function renderShell(): void {
   }
 
   syncIframePointerEvents();
+  const visibleDataset = getVisibleCalendarDataset();
+  const activeReminder = visibleDataset ? buildReminderState(visibleDataset) : state.reminder;
   refs.root.dataset.open = state.open ? 'true' : 'false';
-  refs.root.dataset.hasUpcoming = state.reminder.hasUpcoming ? 'true' : 'false';
+  refs.root.dataset.hasUpcoming = activeReminder.hasUpcoming ? 'true' : 'false';
   refs.root.dataset.tab = uiState.sidebarTab;
   refs.root.dataset.readingBook = uiState.openedBookId ? 'true' : 'false';
   refs.root.dataset.mobileSideOpen = !isDesktopMode() && uiState.mobileSideOpen ? 'true' : 'false';
+  refs.root.dataset.panelFullscreen = isDesktopMode() && uiState.panelFullscreen ? 'true' : 'false';
   refs.root.dataset.tagColorOpen = uiState.tagColorDialogOpen ? 'true' : 'false';
   refs.root.dataset.ballDragging = uiState.ballDragging ? 'true' : 'false';
   applyBallPosition();
   applyTheme();
+  updatePanelFullscreenButton();
   updateManagedWorldbookButton();
   renderManagedWorldbookDialog();
   renderTagColorDialog();
@@ -1563,18 +1903,20 @@ function renderShell(): void {
     button.setAttribute('aria-pressed', isActive ? 'true' : 'false');
   });
 
-  if (!state.dataset) {
+  if (!state.dataset || !visibleDataset) {
     refs.monthGrid.innerHTML = '<div class="th-empty">数据加载中…</div>';
     refs.detailPanel.innerHTML = '<div class="th-empty">数据加载中…</div>';
     refs.formPanel.innerHTML = '<div class="th-empty">数据加载中…</div>';
     return;
   }
 
+  const monthBarDataset = getMonthBarDataset(visibleDataset);
   const cells = buildMonthCells({
     month: state.currentMonth,
     selectedDateKey: state.selectedDateKey,
-    dataset: state.dataset,
+    dataset: monthBarDataset,
   });
+  addCompactFestivalMarkers(cells, visibleDataset, monthBarDataset);
   const elliaTicketEvents = buildElliaBetaTicketCalendarEventsForMonth(cells.map(cell => cell.key));
   if (elliaTicketEvents.length) {
     const cellsByKey = new Map(cells.map(cell => [cell.key, cell]));
@@ -1584,12 +1926,20 @@ function renderShell(): void {
       if (!cell) {
         return;
       }
-      const previousChipCount = cell.chips.length + cell.overflowCount;
+      const usedRows = new Set(cell.chips.map(chip => chip.row));
+      const row = Array.from({ length: MONTH_EVENT_ROW_LIMIT }, (_, index) => index).find(
+        rowIndex => !usedRows.has(rowIndex),
+      );
+      if (row === undefined) {
+        cell.overflowCount += 1;
+        return;
+      }
       cell.chips = [
+        ...cell.chips,
         {
           id: event.id,
           title: event.title,
-          row: 0,
+          row,
           startOffset: 0,
           endOffset: 0,
           isStart: true,
@@ -1598,13 +1948,11 @@ function renderShell(): void {
           colorToken: 'user' as const,
           color: event.color,
         },
-        ...cell.chips,
-      ].slice(0, 3);
-      cell.overflowCount = Math.max(0, previousChipCount + 1 - cell.chips.length);
+      ].sort((left, right) => left.row - right.row || left.title.localeCompare(right.title, 'zh-CN'));
     });
   }
-  const monthAgendaGroups = getCurrentMonthAgendaGroups();
-  const selectedAgendaGroups = state.selectedDateKey ? buildDailyAgenda(state.dataset, state.selectedDateKey, 1) : [];
+  const monthAgendaGroups = getCurrentMonthAgendaGroups(visibleDataset);
+  const selectedAgendaGroups = state.selectedDateKey ? buildDailyAgenda(visibleDataset, state.selectedDateKey, 1) : [];
   const detail = buildSelectedDayDetail({
     dateKey: state.selectedDateKey,
     cells,
@@ -1612,11 +1960,14 @@ function renderShell(): void {
   });
   const selectedLabel = detail.agenda?.label ?? fallbackDateLabel(state.selectedDateKey);
 
-  refs.monthGrid.innerHTML = uiState.openedBookId ? renderBookMainView(uiState.openedBookId) : renderMonthView(cells);
+  refs.monthGrid.innerHTML = uiState.openedBookId
+    ? renderBookMainView(uiState.openedBookId)
+    : renderMonthView(cells, visibleDataset);
+  const showingMonthAgenda = !state.selectedDateKey && uiState.sidebarTab === 'detail';
   refs.detailPanel.innerHTML =
     uiState.sidebarTab === 'archive'
       ? renderArchivePanel()
-      : !state.selectedDateKey && isDesktopMode()
+      : showingMonthAgenda
         ? renderAgendaPanel(monthAgendaGroups)
         : renderDetailPanel(selectedLabel, detail.agenda?.items ?? []);
   const sideTitle = refs.root.querySelector<HTMLElement>('.th-side-title');
@@ -1628,7 +1979,7 @@ function renderShell(): void {
           ? state.editingEventId
             ? '编辑事件'
             : '新增事件'
-          : !state.selectedDateKey && isDesktopMode()
+          : showingMonthAgenda
             ? `${state.currentMonth.month}月事件`
             : selectedLabel || '日期详情';
   }
@@ -2049,25 +2400,27 @@ function resetPanelPosition(): void {
   if (!isDesktopMode()) {
     uiState.panelLeft = null;
     uiState.panelTop = null;
+    uiState.panelFullscreen = false;
     if (refs.panel) {
       refs.panel.style.left = '';
       refs.panel.style.top = '';
     }
     return;
   }
+  uiState.panelFullscreen = false;
   const viewport = getViewportSize({ hostWindow: uiWindow, hostDocument: uiDocument });
   if (!refs.panel) {
     return;
   }
-  const width = refs.panel.offsetWidth || Math.min(1320, viewport.width * 0.9);
-  const height = refs.panel.offsetHeight || Math.min(860, viewport.height * 0.9);
+  const width = refs.panel.offsetWidth || Math.min(1560, viewport.width * 0.96);
+  const height = refs.panel.offsetHeight || Math.min(960, viewport.height * 0.94);
   uiState.panelLeft = Math.round((viewport.width - width) / 2);
   uiState.panelTop = Math.round((viewport.height - height) / 2);
   applyPanelPosition();
 }
 
 function handlePanelDragStart(event: MouseEvent): void {
-  if (!isDesktopMode() || !refs.panel) {
+  if (!isDesktopMode() || uiState.panelFullscreen || !refs.panel) {
     return;
   }
   const target = event.target as HTMLElement | null;
@@ -2182,12 +2535,29 @@ function bindEvents(): void {
       setOpen(false);
     },
     onReload: refreshDataset,
+    onTogglePanelFullscreen: () => {
+      setPanelFullscreen(!uiState.panelFullscreen);
+    },
     onToggleTheme: toggleTheme,
+    onToggleFestivalScope: () => {
+      uiState.showAllFestivals = !uiState.showAllFestivals;
+      renderShell();
+    },
     onOpenTagColorPanel: openTagColorDialog,
     onCloseTagColorPanel: closeTagColorDialog,
     onManagedWorldbookClick: handleManagedWorldbookClick,
     onSwitchTab: switchSidebarTab,
     onOpenCreateForm: startCreateForm,
+    onOpenMobileAgenda: () => {
+      state.selectedDateKey = '';
+      state.editingEventId = null;
+      state.formMode = 'create';
+      uiState.openedBookId = null;
+      uiState.openedBookPageIndex = 0;
+      switchSidebarTab('detail');
+      renderShell();
+      revealSidebarOnMobile();
+    },
     onCloseMobileSide: hideSidebarOnMobile,
     onCancelForm: () => {
       state.editingEventId = null;
@@ -2317,7 +2687,7 @@ function bindEvents(): void {
       state.showArchived = checked;
       renderShell();
     },
-    onAgendaSortChange: (sort: 'date-asc' | 'date-desc' | 'title-asc') => {
+    onAgendaSortChange: (sort: AgendaSortMode) => {
       uiState.agendaSort = sort;
       renderShell();
     },
@@ -2339,6 +2709,7 @@ function bindEvents(): void {
       if (!isDesktopMode()) {
         uiState.panelLeft = null;
         uiState.panelTop = null;
+        uiState.panelFullscreen = false;
         if (refs.panel) {
           refs.panel.style.left = '';
           refs.panel.style.top = '';

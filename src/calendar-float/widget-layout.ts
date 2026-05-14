@@ -39,8 +39,8 @@ export function applyPanelPosition(options: {
     return;
   }
   if (state.panelLeft == null || state.panelTop == null) {
-    panel.style.left = '5vw';
-    panel.style.top = '4vh';
+    panel.style.left = '2vw';
+    panel.style.top = '2vh';
     return;
   }
   panel.style.left = `${state.panelLeft}px`;
@@ -69,8 +69,8 @@ export function resetPanelPosition(options: {
     return;
   }
 
-  const width = panel.offsetWidth || Math.min(1320, viewport.width * 0.9);
-  const height = panel.offsetHeight || Math.min(860, viewport.height * 0.9);
+  const width = panel.offsetWidth || Math.min(1560, viewport.width * 0.96);
+  const height = panel.offsetHeight || Math.min(960, viewport.height * 0.94);
   state.panelLeft = Math.round((viewport.width - width) / 2);
   state.panelTop = Math.round((viewport.height - height) / 2);
   applyPanelPosition({ panel, hostWindow, hostDocument, state });

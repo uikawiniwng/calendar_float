@@ -23,6 +23,7 @@ import {
   collectEventTags,
   readActiveBuckets,
   readArchiveStore,
+  readCurrentWorldLocation,
   readCurrentWorldTime,
   resolveCalendarEventColor,
 } from './storage';
@@ -46,6 +47,17 @@ function buildRuntimeContext(now: DatePoint): 日历运行时触发上下文 {
 
 function readUiSummary(metadata: Record<string, unknown> | undefined): string {
   return String(metadata?.简介 ?? metadata?.summary ?? metadata?.uiSummary ?? '').trim();
+}
+
+function readFestivalLocationKeywords(festival: 日历运行时节庆条目): string[] {
+  const values = [
+    ...(festival.地点关键词 ?? []),
+    ...(Array.isArray(festival.元数据?.地点关键词) ? festival.元数据.地点关键词 : []),
+  ];
+  return values
+    .map(item => String(item || '').trim())
+    .filter(Boolean)
+    .filter((item, index, array) => array.indexOf(item) === index);
 }
 
 function parseEventTextToPoint(text: string, now: DatePoint): DatePoint | null {
@@ -200,6 +212,7 @@ async function buildRuntimeFestivalRecord(
   const entryName = festival.介绍?.条目?.条目名 || festival.介绍?.文本库?.条目名;
   const uiSummary = readUiSummary(festival.介绍?.元数据);
   const introText = uiSummary || intro.正文 || festival.名称;
+  const locationKeywords = readFestivalLocationKeywords(festival);
   return {
     id: festival.id,
     title: festival.名称,
@@ -211,12 +224,14 @@ async function buildRuntimeFestivalRecord(
     sourceKind: 'worldbook',
     recurrence: festival.周期 ? { intervalYears: festival.周期.每隔年, lastYear: festival.周期.上次年份 } : undefined,
     relatedBookIds: [...(festival.相关书籍 ?? [])],
+    locationKeywords,
     stages: [],
     range: dateRange.range,
     metadata: {
       source: 'runtime_worldbook',
       monthDayRange: `${formatMonthDay(dateRange.range.start)}~${formatMonthDay(dateRange.range.end)}`,
       ...(festival.周期 ? { recurrence: festival.周期 } : {}),
+      ...(locationKeywords.length > 0 ? { locationKeywords, 地点关键词: locationKeywords } : {}),
       introWarnings: intro.警告,
       original: festival,
     },
@@ -241,6 +256,7 @@ export async function loadCalendarDatasetFromRuntimeWorldbook(): Promise<Calenda
   const archive = readArchiveStore();
   const runtimeIndex = await readCalendarRuntimeIndex();
   const worldTime = readCurrentWorldTime();
+  const currentLocationText = readCurrentWorldLocation();
   const now = worldTime.point ?? {
     year: new Date().getFullYear(),
     month: new Date().getMonth() + 1,
@@ -265,6 +281,7 @@ export async function loadCalendarDatasetFromRuntimeWorldbook(): Promise<Calenda
     nowText: worldTime.text,
     nowDate: worldTime.point ?? undefined,
     calendarAnchor: worldTime.anchor ?? undefined,
+    currentLocationText,
     activeEvents,
     archivedEvents,
     festivals: runtimeFestivals.filter((value): value is FestivalRecord => Boolean(value)),

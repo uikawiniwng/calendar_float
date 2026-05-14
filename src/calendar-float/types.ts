@@ -168,6 +168,7 @@ export interface FestivalRecord {
   range?: DateRange;
   recurrence?: CalendarFestivalRecurrence;
   relatedBookIds: string[];
+  locationKeywords: string[];
   stages: WorldbookStageRecord[];
   metadata: Record<string, unknown>;
 }
@@ -185,6 +186,14 @@ export interface DayCellEventChip {
   color?: CalendarEventColorStyle;
 }
 
+export interface DayCellFestivalMarker {
+  id: string;
+  title: string;
+  iconSvg: string;
+  color: CalendarEventColorStyle;
+  iconColor?: string;
+}
+
 export interface MonthDayCell {
   key: string;
   year: number;
@@ -196,6 +205,7 @@ export interface MonthDayCell {
   isSelected: boolean;
   reminderLevel: ReminderLevel;
   chips: DayCellEventChip[];
+  markers: DayCellFestivalMarker[];
   overflowCount: number;
 }
 
@@ -210,7 +220,14 @@ export interface DailyAgendaItem {
   type: CalendarBucketType | '节庆';
   startText: string;
   endText: string;
+  periodLabel?: string;
+  sortStartKey?: string;
+  sortEndKey?: string;
+  isPeriod?: boolean;
   stageTitle?: string;
+  festivalIconSvg?: string;
+  festivalIconColor?: string;
+  festivalLocationLabel?: string;
   tags: string[];
   relatedBookIds: string[];
   reminderLevel: ReminderLevel;
@@ -234,6 +251,7 @@ export interface CalendarDataset {
   nowText: string;
   nowDate?: DatePoint;
   calendarAnchor?: CalendarAnchor;
+  currentLocationText: string;
   activeEvents: CalendarEventRecord[];
   archivedEvents: CalendarEventRecord[];
   festivals: FestivalRecord[];

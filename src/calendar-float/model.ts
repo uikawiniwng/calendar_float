@@ -9,6 +9,8 @@ import {
   extractClockTimeText,
   formatDateKey,
   formatDateLabel,
+  formatMonthDay,
+  getEndOfMonth,
   getMonthGridEndWithAnchor,
   getMonthGridStartWithAnchor,
   getRelativeDayDistance,
@@ -18,6 +20,7 @@ import {
   normalizeMonthDayText,
   parseMonthDayWithYear,
 } from './date';
+import { buildFestivalMarker, getFestivalLocationKeywords } from './festival-visual';
 import type {
   AgendaItemKind,
   CalendarDataset,
@@ -32,11 +35,15 @@ import type {
   ReminderState,
 } from './types';
 
+export const MONTH_EVENT_ROW_LIMIT = 2;
+
 function nextDay(point: DatePoint): DatePoint {
   return addDays(point, 1);
 }
 
 function normalizeFestivalEvent(festival: FestivalRecord): CalendarEventRecord {
+  const marker = buildFestivalMarker(festival);
+  const locationKeywords = getFestivalLocationKeywords(festival);
   return {
     source: 'festival',
     sourceKind: festival.sourceKind,
@@ -53,9 +60,14 @@ function normalizeFestivalEvent(festival: FestivalRecord): CalendarEventRecord {
     relatedBookIds: festival.relatedBookIds,
     metadata: {
       ...festival.metadata,
+      locationKeywords,
       stages: festival.stages,
       entryName: festival.entryName,
+      festivalIconSvg: marker.iconSvg,
+      festivalIconColor: marker.iconColor,
+      festivalLocationLabel: locationKeywords[0] || '',
     },
+    color: marker.color,
   };
 }
 
@@ -107,7 +119,10 @@ function resolveFestivalOccurrenceRange(festival: FestivalRecord, startYear: num
   return { start, end };
 }
 
-function buildFestivalEventsForRange(festivals: FestivalRecord[], targetRange: DateRange): CalendarEventRecord[] {
+export function buildFestivalEventsForRange(
+  festivals: FestivalRecord[],
+  targetRange: DateRange,
+): CalendarEventRecord[] {
   return festivals.flatMap(festival => {
     const baseEvent = normalizeFestivalEvent(festival);
     const candidateStartYears = new Set<number>([
@@ -137,6 +152,119 @@ function buildFestivalEventsForRange(festivals: FestivalRecord[], targetRange: D
   });
 }
 
+function getEventSourcePriority(event: CalendarEventRecord): number {
+  if (event.source === 'festival') {
+    return 0;
+  }
+  if (event.source === 'active') {
+    return 1;
+  }
+  return 2;
+}
+
+function getRangeDayLength(range: DateRange): number {
+  return Math.max(1, getRelativeDayDistance(range.start, range.end) + 1);
+}
+
+function clampRangeToBoundary(range: DateRange, boundary: DateRange): DateRange | null {
+  if (!rangesOverlap(range, boundary)) {
+    return null;
+  }
+  return {
+    start: compareDatePoint(range.start, boundary.start) < 0 ? boundary.start : range.start,
+    end: compareDatePoint(range.end, boundary.end) > 0 ? boundary.end : range.end,
+  };
+}
+
+function compareMonthEvents(left: CalendarEventRecord, right: CalendarEventRecord): number {
+  const sourcePriority = getEventSourcePriority(left) - getEventSourcePriority(right);
+  if (sourcePriority !== 0) {
+    return sourcePriority;
+  }
+  if (left.range && right.range) {
+    const startOrder = compareDatePoint(left.range.start, right.range.start);
+    if (startOrder !== 0) {
+      return startOrder;
+    }
+    const lengthOrder = getRangeDayLength(right.range) - getRangeDayLength(left.range);
+    if (lengthOrder !== 0) {
+      return lengthOrder;
+    }
+  }
+  return left.title.localeCompare(right.title, 'zh-CN') || left.id.localeCompare(right.id);
+}
+
+function findWeekCellIndex(week: MonthDayCell[], point: DatePoint): number {
+  return week.findIndex(cell => cell.year === point.year && cell.month === point.month && cell.day === point.day);
+}
+
+function assignMonthWeekChips(cells: MonthDayCell[], events: CalendarEventRecord[]): void {
+  const cellsByKey = new Map(cells.map(cell => [cell.key, cell]));
+  for (let weekStart = 0; weekStart < cells.length; weekStart += 7) {
+    const week = cells.slice(weekStart, weekStart + 7);
+    const first = week[0];
+    const last = week[week.length - 1];
+    if (!first || !last) {
+      continue;
+    }
+
+    const weekRange: DateRange = {
+      start: { year: first.year, month: first.month, day: first.day },
+      end: { year: last.year, month: last.month, day: last.day },
+    };
+    const rowOccupancy = Array.from({ length: MONTH_EVENT_ROW_LIMIT }, () => Array(week.length).fill(false));
+    const weekEvents = events
+      .filter(event => event.range && rangesOverlap(event.range, weekRange))
+      .sort(compareMonthEvents);
+
+    weekEvents.forEach(event => {
+      if (!event.range) {
+        return;
+      }
+      const clamped = clampRangeToBoundary(event.range, weekRange);
+      if (!clamped) {
+        return;
+      }
+
+      const startIndex = findWeekCellIndex(week, clamped.start);
+      const endIndex = findWeekCellIndex(week, clamped.end);
+      if (startIndex < 0 || endIndex < startIndex) {
+        return;
+      }
+
+      const row = rowOccupancy.findIndex(occupied => occupied.slice(startIndex, endIndex + 1).every(value => !value));
+      if (row < 0) {
+        for (let index = startIndex; index <= endIndex; index += 1) {
+          week[index].overflowCount += 1;
+        }
+        return;
+      }
+
+      for (let index = startIndex; index <= endIndex; index += 1) {
+        rowOccupancy[row][index] = true;
+        const cell = week[index];
+        const key = formatDateKey({ year: cell.year, month: cell.month, day: cell.day });
+        cellsByKey.get(key)?.chips.push({
+          id: event.id,
+          title: event.title,
+          row,
+          startOffset: 0,
+          endOffset: 0,
+          isStart: isSameDatePoint({ year: cell.year, month: cell.month, day: cell.day }, event.range.start),
+          isEnd: isSameDatePoint({ year: cell.year, month: cell.month, day: cell.day }, event.range.end),
+          source: event.source,
+          colorToken: event.source === 'festival' ? 'festival' : event.source === 'archive' ? 'archived' : 'user',
+          color: event.color,
+        });
+      }
+    });
+  }
+
+  cells.forEach(cell => {
+    cell.chips.sort((left, right) => left.row - right.row || left.title.localeCompare(right.title, 'zh-CN'));
+  });
+}
+
 export function buildMonthCells(args: {
   month: DatePoint;
   selectedDateKey: string;
@@ -155,13 +283,6 @@ export function buildMonthCells(args: {
   let cursor = monthStart;
   while (compareDatePoint(cursor, monthEnd) <= 0) {
     const key = formatDateKey(cursor);
-    const dayEvents = allEvents
-      .filter(event => event.range && isPointInsideRange(cursor, event.range))
-      .sort((left, right) => {
-        const leftPriority = left.source === 'festival' ? 0 : left.source === 'active' ? 1 : 2;
-        const rightPriority = right.source === 'festival' ? 0 : right.source === 'active' ? 1 : 2;
-        return leftPriority - rightPriority || left.title.localeCompare(right.title, 'zh-CN');
-      });
 
     cells.push({
       key,
@@ -173,23 +294,14 @@ export function buildMonthCells(args: {
       isToday: today ? isSameDatePoint(cursor, today) : false,
       isSelected: key === args.selectedDateKey,
       reminderLevel: resolveDateReminderLevel(cursor, args.dataset),
-      chips: dayEvents.slice(0, 3).map((event, index) => ({
-        id: event.id,
-        title: event.title,
-        row: index,
-        startOffset: 0,
-        endOffset: 0,
-        isStart: !!event.range && isSameDatePoint(cursor, event.range.start),
-        isEnd: !!event.range && isSameDatePoint(cursor, event.range.end),
-        source: event.source,
-        colorToken: event.source === 'festival' ? 'festival' : event.source === 'archive' ? 'archived' : 'user',
-        color: event.color,
-      })),
-      overflowCount: Math.max(0, dayEvents.length - 3),
+      chips: [],
+      markers: [],
+      overflowCount: 0,
     });
     cursor = nextDay(cursor);
   }
 
+  assignMonthWeekChips(cells, allEvents);
   return cells;
 }
 
@@ -197,7 +309,69 @@ function getAgendaItemSortClock(item: Pick<DailyAgendaItem, 'startText' | 'endTe
   return extractClockTimeText(item.startText) || extractClockTimeText(item.endText);
 }
 
+function formatAgendaPeriodLabel(range?: DateRange): string {
+  if (!range) {
+    return '';
+  }
+  const start = formatMonthDay(range.start).replace('-', '/');
+  const end = formatMonthDay(range.end).replace('-', '/');
+  return start === end ? start : `${start}-${end}`;
+}
+
+function isPeriodRange(range?: DateRange): boolean {
+  return Boolean(range && compareDatePoint(range.start, range.end) < 0);
+}
+
+function buildAgendaItem(args: {
+  dataset: CalendarDataset;
+  event: CalendarEventRecord;
+  point: DatePoint;
+  dateKey: string;
+}): DailyAgendaItem {
+  const { dataset, event, point, dateKey } = args;
+  const kind: AgendaItemKind = event.source === 'festival' ? 'festival' : 'user';
+  const matchedFestival =
+    event.source === 'festival' ? dataset.festivals.find(festival => festival.id === event.id) : undefined;
+  const marker = matchedFestival ? buildFestivalMarker(matchedFestival) : undefined;
+  const locationKeywords = matchedFestival ? getFestivalLocationKeywords(matchedFestival) : [];
+  return {
+    id: event.id,
+    dateKey,
+    title: event.title,
+    summary: matchedFestival?.summary || event.content,
+    kind,
+    source: event.source,
+    sourceKind: event.sourceKind,
+    type: event.type,
+    startText: event.startText,
+    endText: event.endText,
+    periodLabel: formatAgendaPeriodLabel(event.range),
+    sortStartKey: event.range ? formatDateKey(event.range.start) : dateKey,
+    sortEndKey: event.range ? formatDateKey(event.range.end) : dateKey,
+    isPeriod: isPeriodRange(event.range),
+    stageTitle: resolveStageTitle(point, matchedFestival),
+    festivalIconSvg: marker?.iconSvg || String(event.metadata.festivalIconSvg || '').trim() || undefined,
+    festivalIconColor: marker?.iconColor || String(event.metadata.festivalIconColor || '').trim() || undefined,
+    festivalLocationLabel:
+      locationKeywords[0] || String(event.metadata.festivalLocationLabel || '').trim() || undefined,
+    tags: event.tags,
+    relatedBookIds: event.relatedBookIds,
+    reminderLevel: resolveEventReminderLevel(point, event),
+    metadata: event.metadata,
+    color: event.color ?? marker?.color,
+  };
+}
+
 function compareDailyAgendaItems(left: DailyAgendaItem, right: DailyAgendaItem): number {
+  if (left.isPeriod !== right.isPeriod) {
+    return left.isPeriod ? -1 : 1;
+  }
+  const startOrder = String(left.sortStartKey || left.dateKey).localeCompare(
+    String(right.sortStartKey || right.dateKey),
+  );
+  if (startOrder !== 0) {
+    return startOrder;
+  }
   const leftClock = getAgendaItemSortClock(left);
   const rightClock = getAgendaItemSortClock(right);
   if (leftClock || rightClock) {
@@ -231,29 +405,7 @@ export function buildDailyAgenda(dataset: CalendarDataset, startDateKey?: string
     const dateKey = formatDateKey(point);
     const items: DailyAgendaItem[] = events
       .filter(event => event.range && isPointInsideRange(point, event.range))
-      .map(event => {
-        const kind: AgendaItemKind = event.source === 'festival' ? 'festival' : 'user';
-        const matchedFestival =
-          event.source === 'festival' ? dataset.festivals.find(festival => festival.id === event.id) : undefined;
-        return {
-          id: event.id,
-          dateKey,
-          title: event.title,
-          summary: matchedFestival?.summary || event.content,
-          kind,
-          source: event.source,
-          sourceKind: event.sourceKind,
-          type: event.type,
-          startText: event.startText,
-          endText: event.endText,
-          stageTitle: resolveStageTitle(point, matchedFestival),
-          tags: event.tags,
-          relatedBookIds: event.relatedBookIds,
-          reminderLevel: resolveEventReminderLevel(point, event),
-          metadata: event.metadata,
-          color: event.color,
-        };
-      })
+      .map(event => buildAgendaItem({ dataset, event, point, dateKey }))
       .sort(compareDailyAgendaItems);
 
     return {
@@ -262,6 +414,38 @@ export function buildDailyAgenda(dataset: CalendarDataset, startDateKey?: string
       items,
     };
   });
+}
+
+export function buildMonthAgenda(dataset: CalendarDataset, month: DatePoint): DailyAgendaGroup[] {
+  const start = { year: month.year, month: month.month, day: 1 };
+  const end = getEndOfMonth(month);
+  const monthRange = { start, end };
+  const events = [
+    ...dataset.activeEvents,
+    ...dataset.archivedEvents,
+    ...buildFestivalEventsForRange(dataset.festivals, monthRange),
+  ];
+  const items = events
+    .filter(event => event.range && rangesOverlap(event.range, monthRange))
+    .map(event => {
+      const clampedRange = event.range ? clampRangeToBoundary(event.range, monthRange) : null;
+      const point = clampedRange?.start ?? start;
+      return buildAgendaItem({
+        dataset,
+        event,
+        point,
+        dateKey: formatDateKey(point),
+      });
+    })
+    .sort(compareDailyAgendaItems);
+
+  return [
+    {
+      dateKey: formatDateKey(start),
+      label: `${month.month}月事件`,
+      items,
+    },
+  ];
 }
 
 export function buildReminderState(dataset: CalendarDataset): ReminderState {
