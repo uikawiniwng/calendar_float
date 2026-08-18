@@ -1,7 +1,7 @@
 import { buildFestivalDateRange } from '../../src/calendar-float/runtime-dataset/festivals';
 import { 构建日期窗口, 解析节庆日期范围 } from '../../src/calendar-float/runtime-trigger-evaluator/date-window';
 import { buildCalendarFestivalWindow } from '../../src/calendar-float/runtime-trigger-evaluator/reminders';
-import { resolveFestivalDateRange } from '../../src/calendar-float/festival-date-range';
+import { resolveFestivalDateRange, resolveFestivalOccurrenceRange } from '../../src/calendar-float/festival-date-range';
 import type { CalendarRuntimeFestivalEntry } from '../../src/calendar-float/runtime-worldbook/types';
 import type { DatePoint } from '../../src/calendar-float/types';
 
@@ -122,6 +122,42 @@ function testCrossYearRecurrenceAndBoundaryCompatibility(): void {
   assert(sixMonthBoundary?.range.start.year === 1000, '相差六个月时应该保持当前年份');
 }
 
+function testExactOccurrenceYearResolver(): void {
+  const recurrence = { intervalYears: 2, lastYear: 1000 };
+  const hit = resolveFestivalOccurrenceRange({
+    start: '12-30',
+    end: '01-03',
+    startYear: 1002,
+    recurrence,
+  });
+  assert(hit !== null, '指定 recurrence 命中年应该解析 occurrence');
+  assertRange(
+    hit.range,
+    {
+      start: { year: 1002, month: 12, day: 30 },
+      end: { year: 1003, month: 1, day: 3 },
+    },
+    '指定 occurrence year 的跨年 range',
+  );
+
+  const miss = resolveFestivalOccurrenceRange({
+    start: '12-30',
+    end: '01-03',
+    startYear: 1001,
+    recurrence,
+  });
+  assert(miss === null, '指定 recurrence 非命中年不应该生成 occurrence');
+
+  const annual = resolveFestivalOccurrenceRange({
+    start: '05/14',
+    end: '',
+    startYear: 1001,
+  });
+  assert(annual !== null, '没有 recurrence 时指定年份应该按 annual 解析');
+  assert(annual.startText === '05-14' && annual.endText === '05-14', 'exact resolver 应该复用相同的日期规范化');
+  assertPoint(annual.range.start, { year: 1001, month: 5, day: 14 }, 'annual exact occurrence');
+}
+
 function testReminderWindowBoundariesAndNormalization(): void {
   const before = resolveFestivalDateRange({
     start: '05-14',
@@ -205,6 +241,7 @@ function testParseFailureAndLooseMonthDayCompatibility(): void {
 function main(): void {
   testAlternateMonthDayFormatsShareTheSameOccurrenceYear();
   testCrossYearRecurrenceAndBoundaryCompatibility();
+  testExactOccurrenceYearResolver();
   testReminderWindowBoundariesAndNormalization();
   testParseFailureAndLooseMonthDayCompatibility();
   console.log('festival-date-range.check.ts OK');

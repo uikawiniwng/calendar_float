@@ -19,8 +19,8 @@ import {
   isPointInsideRange,
   isSameDatePoint,
   normalizeMonthDayText,
-  parseMonthDayWithYear,
 } from '../date';
+import { resolveFestivalOccurrenceRange } from '../festival-date-range';
 import { getFestivalLocationKeywords } from '../festival-location';
 import { buildFestivalMarker } from '../festival-visual';
 import type {
@@ -114,62 +114,6 @@ function rangesOverlap(left: DateRange, right: DateRange): boolean {
   return compareDatePoint(left.start, right.end) <= 0 && compareDatePoint(left.end, right.start) >= 0;
 }
 
-function isFestivalOccurrenceYear(festival: FestivalRecord, year: number): boolean {
-  const recurrence = festival.recurrence;
-  if (!recurrence) {
-    return true;
-  }
-  const intervalYears = Math.floor(Number(recurrence.intervalYears));
-  const lastYear = Math.floor(Number(recurrence.lastYear));
-  if (!Number.isFinite(intervalYears) || intervalYears <= 1 || !Number.isFinite(lastYear)) {
-    return true;
-  }
-  return (year - lastYear) % intervalYears === 0;
-}
-
-function resolveFestivalMonthDayOccurrenceRange(
-  festival: FestivalRecord,
-  startYear: number,
-  rawStartText: string,
-  rawEndText: string,
-): DateRange | null {
-  const startText = normalizeMonthDayText(rawStartText);
-  const endText = normalizeMonthDayText(rawEndText || rawStartText);
-  if (!startText || !endText) {
-    return null;
-  }
-
-  if (!isFestivalOccurrenceYear(festival, startYear)) {
-    return null;
-  }
-
-  const start = parseMonthDayWithYear(startText, startYear);
-  if (!start) {
-    return null;
-  }
-
-  let end = parseMonthDayWithYear(endText, startYear);
-  if (!end) {
-    return null;
-  }
-
-  if (compareDatePoint(end, start) < 0) {
-    end = parseMonthDayWithYear(endText, startYear + 1);
-    if (!end) {
-      return null;
-    }
-  }
-
-  return { start, end };
-}
-
-function resolveFestivalOccurrenceRange(festival: FestivalRecord, startYear: number): DateRange | null {
-  if (!normalizeMonthDayText(festival.startText) || !normalizeMonthDayText(festival.endText || festival.startText)) {
-    return festival.range ?? null;
-  }
-  return resolveFestivalMonthDayOccurrenceRange(festival, startYear, festival.startText, festival.endText);
-}
-
 export function buildFestivalEventsForRange(
   festivals: FestivalRecord[],
   targetRange: DateRange,
@@ -183,7 +127,15 @@ export function buildFestivalEventsForRange(
       targetRange.end.year + 1,
     ]);
     const ranges = [...candidateStartYears]
-      .map(year => resolveFestivalOccurrenceRange(festival, year))
+      .map(
+        year =>
+          resolveFestivalOccurrenceRange({
+            start: festival.startText,
+            end: festival.endText,
+            startYear: year,
+            recurrence: festival.recurrence,
+          })?.range ?? null,
+      )
       .filter((range): range is DateRange => Boolean(range))
       .filter(range => rangesOverlap(range, targetRange))
       .sort((left, right) => compareDatePoint(left.start, right.start));
@@ -221,7 +173,15 @@ function buildFestivalStageMonthEventsForRange(
   return festival.stages.flatMap(stage => {
     const baseEvent = normalizeFestivalStageMonthEvent(festival, stage);
     const ranges = [...candidateStartYears]
-      .map(year => resolveFestivalMonthDayOccurrenceRange(festival, year, stage.startText, stage.endText))
+      .map(
+        year =>
+          resolveFestivalOccurrenceRange({
+            start: stage.startText,
+            end: stage.endText,
+            startYear: year,
+            recurrence: festival.recurrence,
+          })?.range ?? null,
+      )
       .filter((range): range is DateRange => Boolean(range))
       .filter(range => rangesOverlap(range, targetRange))
       .sort((left, right) => compareDatePoint(left.start, right.start));
