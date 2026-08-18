@@ -38,6 +38,7 @@ import {
 
 let contextWatcher: CalendarRuntimeContextWatcher | null = null;
 let managedWorldbookDiagnosticsState = createManagedWorldbookDiagnosticsState();
+let managedWorldbookDiagnosticsRefreshQueue: Promise<void> = Promise.resolve();
 
 async function refreshManagedWorldbookDiagnosticsAndNotifyMissingRules(
   isCurrent: () => boolean = () => true,
@@ -67,6 +68,24 @@ async function refreshManagedWorldbookDiagnosticsAndNotifyMissingRules(
     return;
   }
   toastr.error(diagnostic.message, diagnostic.title);
+}
+
+function queueManagedWorldbookDiagnosticsRefresh(isCurrent: () => boolean): void {
+  managedWorldbookDiagnosticsRefreshQueue = managedWorldbookDiagnosticsRefreshQueue
+    .catch(() => undefined)
+    .then(async () => {
+      if (!isCurrent()) {
+        return;
+      }
+      try {
+        await refreshManagedWorldbookDiagnosticsAndNotifyMissingRules(isCurrent);
+      } catch (error) {
+        if (!isCurrent()) {
+          return;
+        }
+        console.warn(`[${SCRIPT_NAME}] 初始化托管世界书诊断失败`, error);
+      }
+    });
 }
 
 function teardownCalendarRuntime(reason: string): void {
@@ -100,12 +119,7 @@ async function bootstrapCalendarRuntime(
     }
     console.warn(`[${SCRIPT_NAME}] 初始化最新消息变量失败`, error);
   });
-  void refreshManagedWorldbookDiagnosticsAndNotifyMissingRules(lifecycle.isCurrent).catch(error => {
-    if (!lifecycle.isCurrent()) {
-      return;
-    }
-    console.warn(`[${SCRIPT_NAME}] 初始化托管世界书诊断失败`, error);
-  });
+  queueManagedWorldbookDiagnosticsRefresh(lifecycle.isCurrent);
 
   bootstrapCalendarMvuRemovalArchive();
   bootstrapCalendarRuntimeWorldbookScanner();
