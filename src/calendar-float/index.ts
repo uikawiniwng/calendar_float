@@ -9,12 +9,16 @@ import {
 import { bootstrapCalendarMvuRemovalArchive, teardownCalendarMvuRemovalArchive } from './mvu-removal-archive';
 import { initializeCalendarProfile } from './profile';
 import {
+  type CalendarRuntimeContextChange,
+  type CalendarRuntimeContextIdentity,
+  type CalendarRuntimeContextWatcher,
+  watchCalendarRuntimeContext,
+} from './runtime-context';
+import {
   bootstrapCalendarRuntimeWorldbookScanner,
   teardownCalendarRuntimeWorldbookScanner,
 } from './runtime-worldbook/scanner';
-import {
-  ensureCalendarLatestMessageVariableStore,
-} from './storage';
+import { ensureCalendarLatestMessageVariableStore } from './storage';
 import { bootstrapCalendarWidget } from './widget';
 import {
   buildMissingManagedWorldbookRulesDiagnostic,
@@ -32,51 +36,18 @@ import {
   uninstallCalendarManagedWorldbookEntries,
 } from './worldbook-manager';
 
-let contextWatcherStop: (() => void) | null = null;
-const managedWorldbookDiagnosticsState = createManagedWorldbookDiagnosticsState();
+let contextWatcher: CalendarRuntimeContextWatcher | null = null;
+let managedWorldbookDiagnosticsState = createManagedWorldbookDiagnosticsState();
+let managedWorldbookDiagnosticsRefreshQueue: Promise<void> = Promise.resolve();
 
-function readCalendarRuntimeContextKey(): string {
-  let characterName = '';
-  let chatId = '';
-  try {
-    characterName = String(getCurrentCharacterName?.() || '').trim();
-  } catch (error) {
-    console.warn(`[${SCRIPT_NAME}] 读取当前角色名失败，跳过运行上下文比对`, error);
-  }
-  try {
-    chatId = String(SillyTavern?.getCurrentChatId?.() || '').trim();
-  } catch (error) {
-    console.warn(`[${SCRIPT_NAME}] 读取当前聊天 ID 失败，跳过运行上下文比对`, error);
-  }
-  return `${characterName}\n${chatId}`;
-}
-
-function bootstrapCalendarRuntimeContextWatcher(): void {
-  let currentContextKey = readCalendarRuntimeContextKey();
-  const stops = [
-    eventOn(tavern_events.CHAT_CHANGED, () => {
-      const nextContextKey = readCalendarRuntimeContextKey();
-      if (nextContextKey && nextContextKey !== currentContextKey) {
-        currentContextKey = nextContextKey;
-        window.location.reload();
-      }
-    }).stop,
-    eventOn(tavern_events.CHARACTER_PAGE_LOADED, () => {
-      const nextContextKey = readCalendarRuntimeContextKey();
-      if (nextContextKey && nextContextKey !== currentContextKey) {
-        currentContextKey = nextContextKey;
-        window.location.reload();
-      }
-    }).stop,
-  ];
-  contextWatcherStop = () => {
-    stops.forEach(stop => stop());
-    contextWatcherStop = null;
-  };
-}
-
-async function refreshManagedWorldbookDiagnosticsAndNotifyMissingRules(): Promise<void> {
+async function refreshManagedWorldbookDiagnosticsAndNotifyMissingRules(
+  isCurrent: () => boolean = () => true,
+): Promise<void> {
   await refreshCalendarManagedWorldbookDiagnostics();
+  if (!isCurrent()) {
+    return;
+  }
+
   const diagnostics = getCalendarManagedWorldbookDiagnostics();
   if (diagnostics.allManagedEntriesPresent) {
     return;
@@ -90,41 +61,93 @@ async function refreshManagedWorldbookDiagnosticsAndNotifyMissingRules(): Promis
     worldbookName: diagnostics.worldbookName || getCalendarManagedWorldbookTargetName(),
     missingRules,
   });
+  if (!isCurrent()) {
+    return;
+  }
   if (!shouldNotifyMissingRulesOnce(managedWorldbookDiagnosticsState, diagnostic.key || diagnostic.message)) {
     return;
   }
   toastr.error(diagnostic.message, diagnostic.title);
 }
 
-async function init(): Promise<void> {
+function queueManagedWorldbookDiagnosticsRefresh(isCurrent: () => boolean): void {
+  managedWorldbookDiagnosticsRefreshQueue = managedWorldbookDiagnosticsRefreshQueue
+    .catch(() => undefined)
+    .then(async () => {
+      if (!isCurrent()) {
+        return;
+      }
+      try {
+        await refreshManagedWorldbookDiagnosticsAndNotifyMissingRules(isCurrent);
+      } catch (error) {
+        if (!isCurrent()) {
+          return;
+        }
+        console.warn(`[${SCRIPT_NAME}] 初始化托管世界书诊断失败`, error);
+      }
+    });
+}
+
+function teardownCalendarRuntime(reason: string): void {
+  invalidateCalendarFloatLifecycle();
+  teardownCalendarMvuRemovalArchive();
+  teardownCalendarFloatHostAdapter({ unregister: true, silent: true });
+  teardownCalendarRuntimeWorldbookScanner();
+  window.CalendarFloatWidget?.destroy(reason);
+}
+
+async function bootstrapCalendarRuntime(
+  context: CalendarRuntimeContextIdentity,
+  reason: 'initial' | CalendarRuntimeContextChange['reason'],
+): Promise<void> {
   const lifecycle = beginCalendarFloatLifecycle();
-  console.info(`[${SCRIPT_NAME}] 开始初始化`);
+  managedWorldbookDiagnosticsState = createManagedWorldbookDiagnosticsState();
+  console.info(`[${SCRIPT_NAME}] 开始初始化 runtime`, {
+    reason,
+    generation: lifecycle.generation,
+    characterName: context.characterName,
+    chatId: context.chatId,
+  });
+
   if (!(await completeCalendarFloatLifecycleInitialization(lifecycle, initializeCalendarProfile))) {
     return;
   }
-  void ensureCalendarLatestMessageVariableStore().catch(error => {
+
+  void ensureCalendarLatestMessageVariableStore(lifecycle.isCurrent).catch(error => {
+    if (!lifecycle.isCurrent()) {
+      return;
+    }
     console.warn(`[${SCRIPT_NAME}] 初始化最新消息变量失败`, error);
   });
-  void refreshManagedWorldbookDiagnosticsAndNotifyMissingRules()
-    .catch(error => {
-      console.warn(`[${SCRIPT_NAME}] 初始化托管世界书诊断失败`, error);
-    });
+  queueManagedWorldbookDiagnosticsRefresh(lifecycle.isCurrent);
+
   bootstrapCalendarMvuRemovalArchive();
   bootstrapCalendarRuntimeWorldbookScanner();
   void bootstrapCalendarWidget(lifecycle).catch(error => {
-    if (isCalendarFloatLifecycleCancelledError(error)) {
+    if (isCalendarFloatLifecycleCancelledError(error) || !lifecycle.isCurrent()) {
       return;
     }
     console.warn(`[${SCRIPT_NAME}] 初始化月历 widget 失败`, error);
   });
   void bootstrapCalendarFloatHostAdapter(lifecycle).catch(error => {
-    if (isCalendarFloatLifecycleCancelledError(error)) {
+    if (isCalendarFloatLifecycleCancelledError(error) || !lifecycle.isCurrent()) {
       return;
     }
     console.warn(`[${SCRIPT_NAME}] 初始化月历 host adapter 失败`, error);
   });
-  bootstrapCalendarRuntimeContextWatcher();
+}
 
+async function switchCalendarRuntimeContext(change: CalendarRuntimeContextChange): Promise<void> {
+  console.info(`[${SCRIPT_NAME}] 运行上下文已切换，软重启 runtime`, {
+    reason: change.reason,
+    from: change.previous.key,
+    to: change.next.key,
+  });
+  teardownCalendarRuntime(`context:${change.reason}`);
+  await bootstrapCalendarRuntime(change.next, change.reason);
+}
+
+function installCalendarGlobalApi(): void {
   Object.assign(globalThis, {
     CalendarFloatInstallManagedWorldbookEntries: async () => installCalendarManagedWorldbookEntries(),
     CalendarFloatInstallManagedEntriesToWorldbook: async (name: string) =>
@@ -133,13 +156,22 @@ async function init(): Promise<void> {
   });
 }
 
+async function init(): Promise<void> {
+  console.info(`[${SCRIPT_NAME}] 开始初始化`);
+  installCalendarGlobalApi();
+  contextWatcher?.stop();
+  contextWatcher = watchCalendarRuntimeContext(switchCalendarRuntimeContext);
+  await bootstrapCalendarRuntime(contextWatcher.initial, 'initial');
+}
+
 function cleanup(): void {
-  invalidateCalendarFloatLifecycle();
   console.info(`[${SCRIPT_NAME}] 开始卸载`);
+  contextWatcher?.stop();
+  contextWatcher = null;
+  invalidateCalendarFloatLifecycle();
   teardownCalendarMvuRemovalArchive();
   teardownCalendarFloatHostAdapter({ unregister: true, silent: true });
   teardownCalendarRuntimeWorldbookScanner();
-  contextWatcherStop?.();
   window.CalendarFloatWidget?.destroy('pagehide');
 }
 

@@ -4,11 +4,12 @@
 
 ## 根文件
 
-- `index.ts`：脚本主入口。初始化 profile、变量迁移、runtime scanner、widget、host adapter，并把调试 / 安装函数挂到 `globalThis`
+- `index.ts`：脚本主入口。初始化 context-scoped runtime（profile、变量迁移、runtime scanner、widget、host adapter），并把调试 / 安装函数挂到 `globalThis`
 - `constants.ts`：共享常量，例如脚本名、根 DOM id
 - `types.ts`：跨模块共享的月历数据类型
 - `date.ts`：日期解析、格式化、范围判断、世界时间文本解析
 - `festival-date-range.ts`：节庆月日范围的唯一纯 resolver；统一规范化、最近举办年、周期、跨年、提醒预窗口与状态
+- `runtime-context.ts`：当前角色 / 聊天 identity 与切换监听的唯一入口；context 变化时由 `index.ts` 让旧 lifecycle generation 失效并软重启 runtime，不刷新页面
 - `host-adapter.ts`：和外部宿主页 / host 的桥接启动与清理
 - `mvu-removal-archive.ts`：把 MVU 变量删除同步到月历归档的桥接逻辑
 - `form-service.ts`：用户自定义事件的新增、编辑、删除等表单保存逻辑
@@ -36,6 +37,7 @@
 
 ## 修改路线
 
+- 只改角色 / 聊天切换与 runtime 生命周期：优先改 `runtime-context.ts` 和 `index.ts`；沿用 lifecycle generation cancellation，不要让各模块各自发明 context 切换机制
 - 只改固定事件 YAML 结构：优先改 `fixed-event-index-editor/parse.ts`、`serialize.ts`、`edit.ts` 和对应 check
 - 只改 profile 时间 / 地点 / 纪元解析：优先改 `profile/` 和 `runtime-worldbook/config.ts`
 - 只改 runtime 读取兼容性：优先改 `runtime-worldbook/loader.ts`、`normalizer.ts` 和对应 check
@@ -54,3 +56,4 @@
 - 不要把旧字段 `默认设置.mvu时间路径` / `默认设置.mvu地点路径` 写成新文档示例；它们只属于 fallback
 - 不要把新的 `.check.ts` 放在 `src/`；check 统一放到 `checks/calendar-float/`，按原模块路径分目录
 - 不要绕过 `runtime-worldbook/snapshot.ts` 在一次 dataset/scan 内重复读取同一世界书，也不要给 scanner 加平行 publish 通道
+- 不要在角色 / 聊天切换时使用 `window.location.reload()`；必须通过 `runtime-context.ts` 触发旧 generation 失效与 runtime 软重启
