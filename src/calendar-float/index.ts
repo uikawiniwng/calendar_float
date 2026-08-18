@@ -154,7 +154,11 @@ function cleanup(): void {
   console.info(`[${SCRIPT_NAME}] 开始卸载`);
   contextWatcher?.stop();
   contextWatcher = null;
-  teardownCalendarRuntime('pagehide');
+  invalidateCalendarFloatLifecycle();
+  teardownCalendarMvuRemovalArchive();
+  teardownCalendarFloatHostAdapter({ unregister: true, silent: true });
+  teardownCalendarRuntimeWorldbookScanner();
+  window.CalendarFloatWidget?.destroy('pagehide');
 }
 
 $(() => {
