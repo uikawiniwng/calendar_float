@@ -27,6 +27,28 @@ export interface FestivalDateRangeResult {
   state: 'before' | 'active' | 'outside';
 }
 
+export interface FestivalOccurrenceRangeInput {
+  start: string;
+  end: string;
+  startYear: number;
+  recurrence?: FestivalDateRangeInput['recurrence'];
+}
+
+export interface FestivalOccurrenceRangeResult {
+  startText: string;
+  endText: string;
+  range: DateRange;
+}
+
+function isFestivalOccurrenceYear(year: number, recurrence?: FestivalDateRangeInput['recurrence']): boolean {
+  const intervalYears = Math.floor(Number(recurrence?.intervalYears));
+  const lastYear = Math.floor(Number(recurrence?.lastYear));
+  if (!Number.isFinite(intervalYears) || intervalYears <= 1 || !Number.isFinite(lastYear)) {
+    return true;
+  }
+  return (year - lastYear) % intervalYears === 0;
+}
+
 function getNearestOccurrenceYear(year: number, recurrence?: FestivalDateRangeInput['recurrence']): number {
   const intervalYears = Math.floor(Number(recurrence?.intervalYears));
   const lastYear = Math.floor(Number(recurrence?.lastYear));
@@ -45,10 +67,33 @@ function normalizePrepareDays(value: number | undefined): number {
   return Number.isFinite(days) ? Math.floor(Math.max(0, days)) : 0;
 }
 
-export function resolveFestivalDateRange(input: FestivalDateRangeInput): FestivalDateRangeResult | null {
+export function resolveFestivalOccurrenceRange(
+  input: FestivalOccurrenceRangeInput,
+): FestivalOccurrenceRangeResult | null {
   const startText = normalizeMonthDayText(input.start);
   const endText = normalizeMonthDayText(input.end || input.start);
-  if (!startText || !endText) {
+  if (!startText || !endText || !isFestivalOccurrenceYear(input.startYear, input.recurrence)) {
+    return null;
+  }
+
+  const start = parseMonthDayWithYear(startText, input.startYear);
+  let end = parseMonthDayWithYear(endText, input.startYear);
+  if (!start || !end) {
+    return null;
+  }
+  if (compareDatePoint(end, start) < 0) {
+    end = parseMonthDayWithYear(endText, input.startYear + 1);
+    if (!end) {
+      return null;
+    }
+  }
+
+  return { startText, endText, range: { start, end } };
+}
+
+export function resolveFestivalDateRange(input: FestivalDateRangeInput): FestivalDateRangeResult | null {
+  const startText = normalizeMonthDayText(input.start);
+  if (!startText) {
     return null;
   }
 
@@ -57,28 +102,26 @@ export function resolveFestivalDateRange(input: FestivalDateRangeInput): Festiva
     return null;
   }
   const occurrenceYear = getNearestOccurrenceYear(inferAnchorYear(input.now, startWithoutYear.month), input.recurrence);
-  const start = parseMonthDayWithYear(startText, occurrenceYear);
-  let end = parseMonthDayWithYear(endText, occurrenceYear);
-  if (!start || !end) {
+  const occurrence = resolveFestivalOccurrenceRange({
+    start: input.start,
+    end: input.end,
+    startYear: occurrenceYear,
+    recurrence: input.recurrence,
+  });
+  if (!occurrence) {
     return null;
   }
-  if (compareDatePoint(end, start) < 0) {
-    end = parseMonthDayWithYear(endText, occurrenceYear + 1);
-    if (!end) {
-      return null;
-    }
-  }
 
-  const range = { start, end };
+  const { endText, range } = occurrence;
   const reminderRange = {
-    start: addDays(start, -normalizePrepareDays(input.prepareDays)),
-    end,
+    start: addDays(range.start, -normalizePrepareDays(input.prepareDays)),
+    end: range.end,
   };
   const state = isPointInsideRange(input.now, range)
     ? 'active'
-    : isPointInsideRange(input.now, reminderRange) && compareDatePoint(input.now, start) < 0
+    : isPointInsideRange(input.now, reminderRange) && compareDatePoint(input.now, range.start) < 0
       ? 'before'
       : 'outside';
 
-  return { startText, endText, range, reminderRange, state };
+  return { startText: occurrence.startText, endText, range, reminderRange, state };
 }
