@@ -62,8 +62,11 @@ export function hasCalendarRuntimeContextChanged(
 export function watchCalendarRuntimeContext(
   onChange: (change: CalendarRuntimeContextChange) => void | Promise<void>,
 ): CalendarRuntimeContextWatcher {
+  globalThis.CalendarFloatRuntimeContextWatcher?.stop();
+
   let current = readCalendarRuntimeContextIdentity();
   let stopped = false;
+  let watcher: CalendarRuntimeContextWatcher;
 
   const handleChange = (reason: CalendarRuntimeContextChangeReason): void => {
     if (stopped) {
@@ -86,7 +89,7 @@ export function watchCalendarRuntimeContext(
     eventOn(tavern_events.CHARACTER_PAGE_LOADED, () => handleChange('character_page_loaded')).stop,
   ];
 
-  return {
+  watcher = {
     initial: current,
     stop: () => {
       if (stopped) {
@@ -94,6 +97,15 @@ export function watchCalendarRuntimeContext(
       }
       stopped = true;
       stops.forEach(stop => stop());
+      if (globalThis.CalendarFloatRuntimeContextWatcher === watcher) {
+        delete globalThis.CalendarFloatRuntimeContextWatcher;
+      }
     },
   };
+  globalThis.CalendarFloatRuntimeContextWatcher = watcher;
+  return watcher;
+}
+
+declare global {
+  var CalendarFloatRuntimeContextWatcher: CalendarRuntimeContextWatcher | undefined;
 }
