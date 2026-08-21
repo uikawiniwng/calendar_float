@@ -15,30 +15,25 @@ export interface CalendarFormSaveInput {
 }
 
 export type CalendarFormSaveResult =
-  | {
-      ok: true;
-    }
-  | {
-      ok: false;
-      message: string;
-    };
+  | { ok: true }
+  | { ok: false; message: string };
 
-function normalizeRepeatRule(rule: string, type: CalendarBucketType): RepeatRule {
+const ALLOWED_REPEAT_RULES: RepeatRule[] = ['无', '每天', '每周', '每月', '每年', '仅工作日', '仅节假日'];
+
+function normalizeRepeatRule(rule: string, type: CalendarBucketType): RepeatRule | null {
   if (type !== '重复') {
     return '无';
   }
-  const allowed: RepeatRule[] = ['无', '每天', '每周', '每月', '每年', '仅工作日'];
-  return allowed.includes(rule as RepeatRule) ? (rule as RepeatRule) : '每天';
+  return ALLOWED_REPEAT_RULES.includes(rule as RepeatRule) ? (rule as RepeatRule) : null;
 }
 
-function buildRawCalendarEvent(input: CalendarFormSaveInput): RawCalendarEvent {
-  const targetType = input.rule !== '无' ? '重复' : input.type;
+function buildRawCalendarEvent(input: CalendarFormSaveInput, repeatRule: RepeatRule): RawCalendarEvent {
   return {
     标题: input.title,
     内容: input.content,
     时间: input.start,
     结束时间: input.end,
-    重复规则: normalizeRepeatRule(input.rule, targetType),
+    重复规则: repeatRule,
     可见性: input.visibility,
     标签: input.tags,
   };
@@ -46,10 +41,13 @@ function buildRawCalendarEvent(input: CalendarFormSaveInput): RawCalendarEvent {
 
 export async function saveCalendarForm(input: CalendarFormSaveInput): Promise<CalendarFormSaveResult> {
   if (!input.id || !input.title || !input.content || !input.start) {
-    return {
-      ok: false,
-      message: '类型 / 标题 / 内容 / 时间 不能为空',
-    };
+    return { ok: false, message: '类型 / 标题 / 内容 / 时间 不能为空' };
+  }
+
+  const targetType: CalendarBucketType = input.rule !== '无' ? '重复' : input.type;
+  const repeatRule = normalizeRepeatRule(input.rule, targetType);
+  if (!repeatRule) {
+    return { ok: false, message: `不支持的重复规则：${input.rule}` };
   }
 
   const buckets = await readActiveBuckets();
@@ -61,10 +59,7 @@ export async function saveCalendarForm(input: CalendarFormSaveInput): Promise<Ca
   const isSameEditingId = Boolean(input.editingRecord && input.editingRecord.id === input.id);
 
   if ((conflictInActive || conflictInArchive) && !isSameEditingId) {
-    return {
-      ok: false,
-      message: 'ID 已存在',
-    };
+    return { ok: false, message: 'ID 已存在' };
   }
 
   if (input.editingRecord) {
@@ -73,8 +68,8 @@ export async function saveCalendarForm(input: CalendarFormSaveInput): Promise<Ca
     delete archive.completed[input.editingRecord.id];
   }
 
-  const targetBucket = input.rule !== '无' || input.type === '重复' ? repeat : temp;
-  targetBucket[input.id] = buildRawCalendarEvent(input);
+  const targetBucket = targetType === '重复' ? repeat : temp;
+  targetBucket[input.id] = buildRawCalendarEvent(input, repeatRule);
 
   replaceArchiveStore(archive);
   await replaceActiveBuckets({ 临时: temp, 重复: repeat });
