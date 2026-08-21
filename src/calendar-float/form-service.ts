@@ -2,6 +2,7 @@ import { readActiveBuckets, readArchiveStore, replaceActiveBuckets, replaceArchi
 import type { CalendarBucketType, CalendarEventRecord, CalendarVisibility, RawCalendarEvent, RepeatRule } from './types';
 
 export interface CalendarFormSaveInput {
+  /** Legacy UI field. Persistence semantics are derived only from `rule`. */
   type: CalendarBucketType;
   id: string;
   title: string;
@@ -20,10 +21,7 @@ export type CalendarFormSaveResult =
 
 const ALLOWED_REPEAT_RULES: RepeatRule[] = ['无', '每天', '每周', '每月', '每年', '仅工作日', '仅节假日'];
 
-function normalizeRepeatRule(rule: string, type: CalendarBucketType): RepeatRule | null {
-  if (type !== '重复') {
-    return '无';
-  }
+function normalizeRepeatRule(rule: string): RepeatRule | null {
   return ALLOWED_REPEAT_RULES.includes(rule as RepeatRule) ? (rule as RepeatRule) : null;
 }
 
@@ -41,14 +39,14 @@ function buildRawCalendarEvent(input: CalendarFormSaveInput, repeatRule: RepeatR
 
 export async function saveCalendarForm(input: CalendarFormSaveInput): Promise<CalendarFormSaveResult> {
   if (!input.id || !input.title || !input.content || !input.start) {
-    return { ok: false, message: '类型 / 标题 / 内容 / 时间 不能为空' };
+    return { ok: false, message: 'ID / 标题 / 内容 / 时间 不能为空' };
   }
 
-  const targetType: CalendarBucketType = input.rule !== '无' ? '重复' : input.type;
-  const repeatRule = normalizeRepeatRule(input.rule, targetType);
+  const repeatRule = normalizeRepeatRule(input.rule);
   if (!repeatRule) {
     return { ok: false, message: `不支持的重复规则：${input.rule}` };
   }
+  const targetType: CalendarBucketType = repeatRule === '无' ? '临时' : '重复';
 
   const buckets = await readActiveBuckets();
   const temp = { ...buckets.临时 };
