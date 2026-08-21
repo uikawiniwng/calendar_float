@@ -6,6 +6,7 @@ export const STYLE_ID = 'th-calendar-float-style';
 export const INSTANCE_KEY = 'CalendarFloatWidget';
 
 export const MVU_ROOT_PATH = 'stat_data.事件.月历';
+// Legacy read compatibility only. New writes persist directly under MVU_ROOT_PATH by event id.
 export const MVU_TEMP_PATH = 'stat_data.事件.月历.临时';
 export const MVU_REPEAT_PATH = 'stat_data.事件.月历.重复';
 
@@ -25,7 +26,7 @@ export const LEGACY_CHAT_BOOK_ABSTRACTS_KEY = 'book_abstracts';
 export const LEGACY_TICKET_ALPHA_STORE_KEY = 'calendar_float_ticket_alpha_store';
 export const LEGACY_TICKET_ALPHA_LATEST_KEY = 'calendar_float_ticket_alpha_latest';
 
-export const REPEAT_RULES: RepeatRule[] = ['无', '每天', '每周', '每月', '每年', '仅工作日'];
+export const REPEAT_RULES: RepeatRule[] = ['无', '每天', '每周', '每月', '每年', '仅工作日', '仅节假日'];
 
 export const PRESET_TAG_OPTIONS: CalendarTagOption[] = [
   { value: '主线', label: '主线', source: 'preset' },
