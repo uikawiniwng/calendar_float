@@ -1,5 +1,5 @@
 import _ from 'lodash';
-import type { ActiveCalendarBuckets, CalendarBucketType, RawCalendarEvent } from './types';
+import type { ActiveCalendarBuckets, CalendarBucketType, CalendarLink, RawCalendarEvent } from './types';
 
 export function sanitizeRule(value: unknown): RawCalendarEvent['重复规则'] {
   const rule = String(value ?? '无') as RawCalendarEvent['重复规则'];
@@ -35,27 +35,14 @@ export function sanitizeReminderLeadDays(value: unknown): number {
   return Number.isFinite(days) ? Math.max(0, Math.floor(days)) : 0;
 }
 
-export function inferDefaultPostAction(
-  type: NonNullable<RawCalendarEvent['类型']>,
-  importance: NonNullable<RawCalendarEvent['重要度']>,
-): NonNullable<RawCalendarEvent['完成后']> {
-  void type;
-  void importance;
-  return '归档';
-}
-
-export function sanitizePostAction(
-  value: unknown,
-  type: NonNullable<RawCalendarEvent['类型']>,
-  importance: NonNullable<RawCalendarEvent['重要度']>,
-): NonNullable<RawCalendarEvent['完成后']> {
+export function sanitizePostAction(value: unknown): NonNullable<RawCalendarEvent['完成后']> {
   const action = String(value ?? '').trim();
   if (action === '不处理') {
     return '历史';
   }
   return ['历史', '自动清理', '归档', '转回忆'].includes(action)
     ? (action as NonNullable<RawCalendarEvent['完成后']>)
-    : inferDefaultPostAction(type, importance);
+    : '归档';
 }
 
 export function sanitizeTagList(value: unknown): string[] {
@@ -66,6 +53,19 @@ export function sanitizeTagList(value: unknown): string[] {
     .map(item => String(item ?? '').trim())
     .filter(Boolean)
     .filter((item, index, array) => array.indexOf(item) === index);
+}
+
+export function sanitizeLink(value: unknown): CalendarLink | undefined {
+  if (!_.isPlainObject(value)) {
+    return undefined;
+  }
+  const source = value as Record<string, unknown>;
+  const 类型 = String(source.类型 ?? '').trim();
+  const ID = String(source.ID ?? '').trim();
+  if (!['任务', '世界事件'].includes(类型) || !ID) {
+    return undefined;
+  }
+  return { 类型: 类型 as CalendarLink['类型'], ID };
 }
 
 export function sanitizeRawEvent(value: unknown, bucketType?: CalendarBucketType): RawCalendarEvent {
@@ -80,12 +80,22 @@ export function sanitizeRawEvent(value: unknown, bucketType?: CalendarBucketType
     结束时间: String(source.结束时间 ?? '').trim(),
     重复规则,
     类型,
-    完成后: sanitizePostAction(source.完成后, 类型, 重要度),
+    完成后: sanitizePostAction(source.完成后),
     重要度,
     提前提醒天数: sanitizeReminderLeadDays(source.提前提醒天数),
     可见性: sanitizeVisibility(source.可见性),
     标签: sanitizeTagList(source.标签),
+    关联: sanitizeLink(source.关联),
   };
+}
+
+export function sanitizeEventRecords(value: unknown): Record<string, RawCalendarEvent> {
+  if (!_.isPlainObject(value)) {
+    return {};
+  }
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).map(([id, event]) => [id, sanitizeRawEvent(event)]),
+  ) as Record<string, RawCalendarEvent>;
 }
 
 export function sanitizeBucketRecords(
@@ -95,16 +105,31 @@ export function sanitizeBucketRecords(
   if (!_.isPlainObject(value)) {
     return {};
   }
-  const source = value as Record<string, unknown>;
   return Object.fromEntries(
-    Object.entries(source).map(([id, event]) => [id, sanitizeRawEvent(event, bucketType)]),
+    Object.entries(value as Record<string, unknown>).map(([id, event]) => [id, sanitizeRawEvent(event, bucketType)]),
   ) as Record<string, RawCalendarEvent>;
+}
+
+export function splitCalendarRecords(records: Record<string, RawCalendarEvent>): ActiveCalendarBuckets {
+  const 临时: Record<string, RawCalendarEvent> = {};
+  const 重复: Record<string, RawCalendarEvent> = {};
+  Object.entries(records).forEach(([id, event]) => {
+    (event.重复规则 === '无' ? 临时 : 重复)[id] = event;
+  });
+  return { 临时, 重复 };
+}
+
+export function flattenCalendarBuckets(buckets: ActiveCalendarBuckets): Record<string, RawCalendarEvent> {
+  return sanitizeEventRecords({ ...buckets.临时, ...buckets.重复 });
 }
 
 export function sanitizeActiveCalendarBuckets(value: unknown): ActiveCalendarBuckets {
   const source = _.isPlainObject(value) ? (value as Record<string, unknown>) : {};
-  return {
-    临时: sanitizeBucketRecords(source.临时, '临时'),
-    重复: sanitizeBucketRecords(source.重复, '重复'),
-  };
+  if (_.isPlainObject(source.临时) || _.isPlainObject(source.重复)) {
+    return {
+      临时: sanitizeBucketRecords(source.临时, '临时'),
+      重复: sanitizeBucketRecords(source.重复, '重复'),
+    };
+  }
+  return splitCalendarRecords(sanitizeEventRecords(source));
 }
