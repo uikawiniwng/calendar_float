@@ -27,27 +27,21 @@ function assert(condition: unknown, message: string): void {
 function testRemovedMvuCalendarEventIsArchived(): void {
   const oldVariables = {
     stat_data: {
-      世界: {
-        时间: '复兴纪元488年-6月27日-星期六',
-      },
+      世界: { 时间: '复兴纪元488年-6月27日-星期六' },
       事件: {
         月历: {
-          临时: {
-            trial_day: {
-              标题: '试炼日',
-              内容: '一次性提醒',
-              时间: '复兴纪元488年-6月27日-星期六',
-              重要度: '重要且紧急',
-              标签: ['主线'],
-            },
+          trial_day: {
+            标题: '试炼日',
+            内容: '一次性提醒',
+            时间: '复兴纪元488年-6月27日-星期六',
+            标签: ['主线'],
           },
-          重复: {},
         },
       },
     },
   };
   const newVariables = _.cloneDeep(oldVariables);
-  _.unset(newVariables, 'stat_data.事件.月历.临时.trial_day');
+  _.unset(newVariables, 'stat_data.事件.月历.trial_day');
 
   const result = syncArchiveFromMvuVariableDiff({
     oldVariables,
