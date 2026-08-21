@@ -30,11 +30,10 @@ export async function loadCalendarDatasetFromRuntimeWorldbook(
   const monthAliases = normalizeCalendarMonthAliasList(runtimeIndex.索引?.月份别名);
   const worldTime = readCurrentWorldTime(undefined, monthAliases);
   const currentLocationText = readCurrentWorldLocation();
-  const now = worldTime.point ?? {
-    year: new Date().getFullYear(),
-    month: new Date().getMonth() + 1,
-    day: new Date().getDate(),
-  };
+  if (!worldTime.point) {
+    throw new Error(`当前世界时间无法解析：${worldTime.text || '（空）'}。月历停止构建，避免误用现实日期。`);
+  }
+  const now = worldTime.point;
 
   const runtimeSources = runtimeSnapshot.sources;
   const runtimeFestivals = await Promise.all(
@@ -60,7 +59,7 @@ export async function loadCalendarDatasetFromRuntimeWorldbook(
 
   return {
     nowText: worldTime.text,
-    nowDate: worldTime.point ?? undefined,
+    nowDate: worldTime.point,
     calendarAnchor: worldTime.anchor ?? undefined,
     currentLocationText,
     activeEvents,
