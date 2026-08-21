@@ -1,7 +1,7 @@
 import _ from 'lodash';
 
-import { sanitizeRawEvent } from '../event-normalizer';
-import { getCalendarRepeatEventsPath, getCalendarTempEventsPath } from '../profile';
+import { flattenCalendarBuckets, sanitizeRawEvent } from '../event-normalizer';
+import { getCalendarEventRootPath } from '../profile';
 import type {
   ArchivedCalendarEvent,
   CalendarArchiveStore,
@@ -180,10 +180,7 @@ export async function syncArchiveOnActiveRemoval(
     const previousBucket = previous[bucketType] || {};
     const currentBucket = buckets[bucketType] || {};
     Object.entries(previousBucket).forEach(([id, raw]) => {
-      if (hasActiveEventId(buckets, id)) {
-        return;
-      }
-      if (archive.completed[id]) {
+      if (hasActiveEventId(buckets, id) || archive.completed[id]) {
         return;
       }
 
@@ -201,15 +198,7 @@ export async function syncArchiveOnActiveRemoval(
         skipped += 1;
         return;
       }
-      if (
-        writeArchivedEvent({
-          archive,
-          id,
-          type: bucketType,
-          raw,
-          completedAt,
-        })
-      ) {
+      if (writeArchivedEvent({ archive, id, type: bucketType, raw, completedAt })) {
         archived += 1;
         return;
       }
@@ -258,10 +247,7 @@ export function syncArchiveFromMvuVariableDiff(params: {
     const previousBucket = previous[bucketType] || {};
     const currentBucket = current[bucketType] || {};
     Object.entries(previousBucket).forEach(([id, raw]) => {
-      if (hasActiveEventId(current, id)) {
-        return;
-      }
-      if (archive.completed[id]) {
+      if (hasActiveEventId(current, id) || archive.completed[id]) {
         return;
       }
 
@@ -296,8 +282,7 @@ export function syncArchiveFromMvuVariableDiff(params: {
   });
 
   if (restored > 0) {
-    _.set(params.newVariables, getCalendarTempEventsPath(), current.临时);
-    _.set(params.newVariables, getCalendarRepeatEventsPath(), current.重复);
+    _.set(params.newVariables, getCalendarEventRootPath(), flattenCalendarBuckets(current));
   }
 
   archive.lastActiveSnapshot = cloneBucketsSnapshot(current);
