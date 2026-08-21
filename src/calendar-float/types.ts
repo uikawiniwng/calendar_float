@@ -16,6 +16,12 @@ export type CalendarNarrativeEventType = '日程' | '事件' | '回忆';
 export type CalendarPostAction = '历史' | '自动清理' | '归档' | '转回忆';
 export type CalendarImportance = '重要且紧急' | '重要不紧急' | '不重要但紧急' | '不重要不紧急';
 export type CalendarVisibility = '玩家与LLM' | '仅玩家' | '仅LLM' | '完全不显示';
+export type CalendarLinkType = '任务' | '世界事件';
+
+export interface CalendarLink {
+  类型: CalendarLinkType;
+  ID: string;
+}
 
 export interface CalendarEventColorStyle {
   background: string;
@@ -40,8 +46,13 @@ export interface RawCalendarEvent {
   提前提醒天数?: number;
   可见性?: CalendarVisibility;
   标签?: string[];
+  关联?: CalendarLink;
 }
 
+/**
+ * Internal view only. Persistence is a single `事件.月历.[id]` collection.
+ * The UI may split records by recurrence to reuse existing rendering code.
+ */
 export interface ActiveCalendarBuckets {
   临时: Record<string, RawCalendarEvent>;
   重复: Record<string, RawCalendarEvent>;
