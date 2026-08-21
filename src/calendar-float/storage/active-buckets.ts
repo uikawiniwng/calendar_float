@@ -15,10 +15,6 @@ import {
   warnMessageVariableUnavailable,
 } from './message-variable';
 
-function createEmptyBuckets(): ActiveCalendarBuckets {
-  return { 临时: {}, 重复: {} };
-}
-
 function ensureCalendarRoot(data: Record<string, any>): boolean {
   const rootPath = getCalendarEventRootPath();
   if (_.isPlainObject(_.get(data, rootPath))) {
