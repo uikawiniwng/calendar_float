@@ -11,7 +11,7 @@ import {
 import { sanitizeReminderLeadDays } from './event-normalizer';
 import { getActiveCalendarDateParseOptions } from './profile';
 import { readActiveBuckets, readCurrentWorldTime } from './storage';
-import type { CalendarAnchor, DatePoint, RawCalendarEvent } from './types';
+import type { CalendarAnchor, CalendarMonthAliasRecord, DatePoint, RawCalendarEvent } from './types';
 
 export interface CalendarTimedReminder {
   id: string;
@@ -64,9 +64,16 @@ function parseWeeklyDays(value: string): number[] {
   return [...values];
 }
 
-function parseOneShotDate(value: string, now: DatePoint): DatePoint | null {
+function parseOneShotDate(
+  value: string,
+  now: DatePoint,
+  monthAliases: CalendarMonthAliasRecord[] = [],
+): DatePoint | null {
   const text = String(value || '').trim();
-  const worldDate = parseWorldDateText(text, getActiveCalendarDateParseOptions());
+  const worldDate = parseWorldDateText(text, {
+    monthAliases,
+    ...getActiveCalendarDateParseOptions(),
+  });
   if (worldDate) {
     return worldDate;
   }
@@ -116,6 +123,7 @@ function resolveNextOccurrence(
   event: RawCalendarEvent,
   now: DatePoint,
   anchor?: CalendarAnchor,
+  monthAliases: CalendarMonthAliasRecord[] = [],
 ): DatePoint | null {
   if (event.重复规则 === '每天') {
     return now;
@@ -134,7 +142,7 @@ function resolveNextOccurrence(
     const monthDay = parseMonthDay(event.时间);
     return monthDay ? nextYearlyOccurrence(now, monthDay.month, monthDay.day) : null;
   }
-  return parseOneShotDate(event.时间, now);
+  return parseOneShotDate(event.时间, now, monthAliases);
 }
 
 function parseClockMinutes(value: string): number | null {
@@ -162,9 +170,11 @@ function resolveReminderStatus(args: {
   return 'due';
 }
 
-export async function evaluateCalendarTimedReminders(): Promise<CalendarTimedReminderResult> {
+export async function evaluateCalendarTimedReminders(
+  monthAliases: CalendarMonthAliasRecord[] = [],
+): Promise<CalendarTimedReminderResult> {
   const buckets = await readActiveBuckets();
-  const worldTime = readCurrentWorldTime();
+  const worldTime = readCurrentWorldTime(undefined, monthAliases);
   if (!worldTime.point) {
     return {
       reminders: [],
@@ -180,7 +190,7 @@ export async function evaluateCalendarTimedReminders(): Promise<CalendarTimedRem
     if (event.提醒 === false) {
       continue;
     }
-    const occurrence = resolveNextOccurrence(event, worldTime.point, worldTime.anchor ?? undefined);
+    const occurrence = resolveNextOccurrence(event, worldTime.point, worldTime.anchor ?? undefined, monthAliases);
     if (!occurrence) {
       warnings.push(`月历事项 ${id} 的时间无法解析，已跳过提醒`);
       continue;
