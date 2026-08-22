@@ -1,6 +1,6 @@
 import _ from 'lodash';
 
-import { flattenCalendarBuckets, sanitizeRawEvent } from '../event-normalizer';
+import { convertToMemory, flattenCalendarBuckets, sanitizeRawEvent } from '../event-normalizer';
 import { getCalendarEventRootPath } from '../profile';
 import type {
   ArchivedCalendarEvent,
@@ -66,7 +66,9 @@ function writeArchivedEvent(args: {
   archiveReason?: ArchivedCalendarEvent['archive_reason'];
 }): boolean {
   const normalizedRaw = sanitizeRawEvent(args.raw, args.type);
-  if (shouldSkipArchiveByPolicy({ id: args.id, raw: normalizedRaw, policy: args.archive.policy })) {
+  const archiveReason = args.archiveReason ?? resolveArchiveReason(normalizedRaw);
+  const archivedRaw = archiveReason === 'memory' ? convertToMemory(normalizedRaw, args.type) : normalizedRaw;
+  if (shouldSkipArchiveByPolicy({ id: args.id, raw: archivedRaw, policy: args.archive.policy })) {
     return false;
   }
 
@@ -75,10 +77,10 @@ function writeArchivedEvent(args: {
     type: args.type,
     archived_at: new Date().toISOString(),
     completed_at: args.completedAt ?? '',
-    tags: collectEventTags(args.id, normalizedRaw),
+    tags: collectEventTags(args.id, archivedRaw),
     preserved_for_player: true,
-    archive_reason: args.archiveReason ?? resolveArchiveReason(normalizedRaw),
-    ...normalizedRaw,
+    archive_reason: archiveReason,
+    ...archivedRaw,
   };
   return true;
 }
