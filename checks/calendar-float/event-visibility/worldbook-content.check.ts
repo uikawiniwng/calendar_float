@@ -27,6 +27,7 @@ for (const content of [rules, staticRules]) {
   assert.match(content, /回忆.*仅玩家/);
   assert.match(content, /提前提醒天数: optional\[number\]/);
   assert.match(content, /LLM不得主动写`仅LLM`/);
+  assert.doesNotMatch(content, /仅节假日/);
   assert.doesNotMatch(content, /^ {2}事件\.月历\.临时:/m);
   assert.doesNotMatch(content, /^ {2}事件\.月历\.重复:/m);
   assert.doesNotMatch(content, /每次回复最多新增一个隐藏剧情事件/);
