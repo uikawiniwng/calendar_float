@@ -1,106 +1,105 @@
 # Calendar Float Source Structure
 
-`src/calendar-float/` 是 Calendar Float 主脚本源码。它是 Tavern Helper 浏览器脚本，不是独立 Web App；`index.ts` 初始化 runtime，最终打包为 `dist/calendar-float/index.js`。
+`src/calendar-float/` 是 Calendar Float 的 Tavern Helper 浏览器脚本源码。
 
-## Runtime 主线
+它的产品职责只有两层：
 
-新的产品主线应保持为：
+1. **Temporal UI**：把角色卡已有的固定/动态时间事项整理成玩家可读的月历
+2. **Temporal Reminder**：根据角色卡世界时间判断事项是否即将或已经到时，并向 LLM 提供时间信号
+
+它不拥有任务进度、新闻、世界事件阶段、剧情后果、系统历史或回忆数据库。
+
+## 主要数据流
 
 ```text
-世界时间 + 固定事项 + 动态事项
-            ↓
-       Calendar Dataset
-            ↓
-      玩家月历 UI
-            ↓
-    到时 / 提前提醒 LLM
+世界时间 ───────────────┐
+[fixed_event_index] ───┼─> runtime dataset ─> Calendar UI
+MVU 动态时间事项 ──────┘             └──────> timed reminder -> LLM
 ```
 
-Calendar Float 不拥有任务、新闻、世界事件或剧情状态。模块是否应继续存在，优先按“是否服务于时间读取、时间展示或时间提醒”判断。
+到时 reminder 只说明时间条件成立，不修改其他业务系统状态，也不自动决定剧情结果。
 
 ## 根文件
 
-- `index.ts`：脚本主入口与 context-scoped lifecycle
-- `constants.ts`：共享常量与 MVU 根路径
-- `types.ts`：跨模块 Calendar 数据类型；新产品契约保持薄结构，旧事件字段仅供兼容
-- `date.ts`：世界日期解析、格式化、范围判断
-- `festival-date-range.ts`：固定事项月日范围、跨年和周期 resolver
-- `runtime-context.ts`：当前角色 / 聊天 context 与软重启入口
-- `host-adapter.ts`：外部宿主页桥接
-- `form-service.ts`：玩家新增 / 编辑动态时间事项
-- `event-normalizer.ts`：动态事项格式归一化与旧数据迁移
-- `runtime-ui-dataset.ts`：widget 获取统一 dataset 的门面
-- `runtime-chat-context.ts`：runtime 扫描需要的聊天文本上下文
+- `index.ts`：runtime 生命周期入口；初始化 profile、变量兼容、scanner、widget 与 host adapter
+- `constants.ts`：脚本名、DOM id、变量路径等共享常量
+- `types.ts`：Calendar runtime/UI 共用类型
+- `date.ts`：世界日期解析、格式化、范围计算
+- `event-normalizer.ts`：读取动态事项并把旧数据迁移为当前薄 schema
+- `event-reminder.ts`：动态事项的时间判断与 `<calendar_reminder>` 构建
+- `festival-date-range.ts`：固定节庆日期范围、跨年与 recurrence resolver
+- `runtime-context.ts`：角色/聊天切换与 lifecycle generation
+- `host-adapter.ts`：与 SillyTavern/Tavern Helper 宿主页的桥接
+- `form-service.ts`：玩家新增/编辑动态时间事项
+- `festival-visual.ts` / `festival-visual-types.ts`：固定事项视觉规则
+- `runtime-ui-dataset.ts`：widget 读取 runtime dataset 的门面
+- `runtime-chat-context.ts`：runtime 扫描所需的聊天上下文
+
+旧 `可见性` 只作为旧存档/旧 Widget 的迁移桥接，不属于新的持久化数据契约。
 
 ## 子目录
 
-### `profile/`
+- `calendar-view-model/`：把 dataset 转成月格、agenda、提醒状态等纯 UI model
+- `fixed-event-index-editor/`：`[fixed_event_index]` 的结构化编辑、校验、序列化与保存
+- `profile/`：不同角色卡的 MVU 时间/地点路径、纪元和日期解析配置
+- `runtime-dataset/`：合并固定事项、动态事项、资料与当前世界时间
+- `runtime-trigger-evaluator/`：固定节庆/正文的时间窗口、关键词与提醒判定
+- `runtime-worldbook/`：发现、读取、归一化 `[fixed_event_index]` 与相关正文世界书
+- `storage/`：动态事项持久化、Calendar settings、来源配置、标签与旧数据迁移
+- `widget/`：悬浮月历 UI、表单与交互
+- `worldbook-manager/`：Calendar 管理的世界书规则安装、诊断、搬运与卸载
+- `dlc_ellia/`：《命定之诗》专属可选 addon，不属于通用 Calendar core
 
-角色卡 Calendar 配置：世界时间路径、地点路径、纪元、月份别名与 profile 专属显示规则。
+## Storage 边界
 
-### `runtime-worldbook/`
+新的 Calendar storage 只长期拥有：
 
-发现并读取 `[fixed_event_index]` 与相关正文世界书内容，建立一次 operation 使用的 worldbook snapshot。
+- `stat_data.事件.月历.[事件ID]`：动态时间事项
+- Calendar script settings：世界书来源、标签颜色、提醒去重等 UI/runtime 设置
 
-### `runtime-dataset/`
+Calendar **不再拥有 Archive / Memory store**。
 
-把固定事项、动态事项与必要的相关资料组装成 UI 使用的 `CalendarDataset`。这里是不同来源汇合的主要边界。
+重构期间 `storage/archive-actions.ts`、`archive-settings.ts`、`archive-store.ts` 仅是旧 Widget host 的无状态兼容 facade：
 
-### `runtime-trigger-evaluator/`
+- `completed` 永远为空
+- 不会创建或恢复历史记录
+- 旧“归档/完成”调用最终只会删除 active item，或成为 no-op
+- 只有仍然有效的来源设置、标签颜色等会迁入 `calendar_float_store.settings`
 
-判断固定事项是否处于日期窗口、提醒窗口或满足相关 runtime 条件。重构后这里的职责应收敛到“什么时候该显示 / 什么时候该提醒”，不要演化成剧情状态机。
-
-### `storage/`
-
-动态事项、脚本配置与迁移兼容。新的 persistence 是单一：
-
-```text
-stat_data.事件.月历.[事件ID]
-```
-
-`临时/重复` bucket 只可作为旧数据兼容与内部 view，不得继续作为新 persistence semantics。
-
-### `widget/`
-
-玩家可见的悬浮月历、日期详情、动态事项表单、设置与创作者工具入口。见 `widget/structure.md`。
-
-### `fixed-event-index-editor/`
-
-角色卡作者编辑 `[fixed_event_index]` 的结构化工具。见 `fixed-event-index-editor/structure.md`。
-
-### `worldbook-manager/`
-
-安装、诊断与维护 Calendar Float 使用的世界书基础设施，以及生成 LLM-facing 月历变量说明。
-
-### `calendar-view-model/`
-
-把 dataset 转换成月份格子、日程列表和 UI chip 等纯 view model。
-
-### Legacy / compatibility surface
-
-目前源码仍包含归档、旧可见性与《命定之诗》DLC 专用逻辑。重构期间：
-
-- 不继续给这些 legacy 模块增加新的产品职责
-- 新 MVU contract 不再暴露 `类型 / 完成后 / 重要度 / 可见性 / 回忆` 等旧事件管理概念
-- 确认 UI 与 migration 不再依赖后，可逐步删除相应代码与 checks
-- `dlc_ellia/` 等世界专用能力不得反向污染通用 Calendar core
+当 Widget host 不再引用这些旧 API 后，应直接删除这些 facade。
 
 ## 修改路线
 
-- 世界时间 / 日期解析：`date.ts`、`profile/`
-- 固定日程来源：`runtime-worldbook/`、`fixed-event-index-editor/`
-- 动态事项结构：`types.ts`、`event-normalizer.ts`、`storage/`、`form-service.ts`
-- Dataset 合并：`runtime-dataset/`
-- 到时提醒：`runtime-trigger-evaluator/` 与 reminder 注入路径
-- 玩家 UI：`widget/`、`calendar-view-model/`
-- LLM-facing 规则：`mvu_rules/`、`worldbook-manager/content.ts`
+- 改动态 MVU schema / 旧存档迁移：`event-normalizer.ts`、`storage/active-buckets.ts`
+- 改动态事项到时提醒：`event-reminder.ts` 与 `runtime-worldbook/scanner.ts`
+- 改固定世界日程 schema：`fixed-event-index-editor/` 与 `runtime-worldbook/`
+- 改固定节庆提醒：`runtime-trigger-evaluator/`
+- 改 Calendar UI：`widget/` 与 `calendar-view-model/`
+- 改 profile 时间/地点/纪元：`profile/` 与 `runtime-worldbook/config.ts`
+- 改来源/标签等脚本设置：`storage/calendar-settings.ts`
+
+## Core 判断规则
+
+准备给 Calendar Float 加功能时先问：
+
+> 这个功能的主要职责，是读取时间、显示时间、比较时间，还是在时间到达时提醒？
+
+如果答案都不是，它通常不属于 Calendar core。
+
+例如：
+
+- 任务完成条件 -> Mission system
+- 世界事件阶段 -> World Event system
+- 新闻内容 -> News system
+- 自动剧情历史 -> 不属于 Calendar
+- NPC 主动写下的 Diary -> 可以作为未来的**带日期内容来源**接入 Calendar，但 Diary 内容本身由 Diary/NPC 系统拥有
 
 ## 不要再做的事
 
-- 不要让 Calendar 自行创造未来剧情
-- 不要把任务进度、奖励、事件阶段、新闻内容复制进 Calendar
-- 不要用现实电脑日期补救无法解析的世界时间
-- 不要为了 UI 分类重新建立多层 persistence hierarchy
-- 不要把《命定之诗》的地点、节庆或命名硬编码回通用模块
-- 不要在 `widget/index.ts` 堆纯数据转换逻辑
-- 不要在角色 / 聊天切换时使用 `window.location.reload()`
+- 不要让 Calendar 自行规划隐藏剧情
+- 不要因为时间到了就判定任务成功/失败或强制触发世界事件
+- 不要恢复 Archive / Memory 系统历史数据库
+- 不要把任务、新闻或世界事件状态复制进月历
+- 不要把一次性/重复事项重新拆成持久化父目录
+- 不要在世界时间解析失败时回退到现实电脑时间
+- 不要把《命定之诗》的专属规则硬编码回通用模块
