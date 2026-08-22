@@ -14,6 +14,8 @@ assert.match(display, /'显示'/);
 assert.match(display, /'提醒'/);
 assert.doesNotMatch(display, /'关联'/);
 assert.doesNotMatch(display, /'类型'/);
+assert.doesNotMatch(display, /'完成后'/);
+assert.doesNotMatch(display, /'重要度'/);
 
 const rules = buildCalendarUpdateRulesEntryContent();
 const staticRules = readFileSync('src/calendar-float/mvu_rules/月历变量更新规则.txt', 'utf8');
@@ -28,13 +30,15 @@ for (const content of [rules, staticRules]) {
   assert.match(content, /显示: optional\[boolean\]/);
   assert.match(content, /提醒: optional\[boolean\]/);
   assert.match(content, /显示.*只表示不显示在玩家月历UI/);
-  assert.match(content, /不表示月历拥有或推进隐藏剧情/);
   assert.match(content, /到达预定时间只表示时间条件成立/);
   assert.doesNotMatch(content, /关联: optional/);
   assert.doesNotMatch(content, /可见性: optional/);
   assert.doesNotMatch(content, /仅LLM/);
-  assert.doesNotMatch(content, /完全不显示/);
   assert.doesNotMatch(content, /回忆/);
+  assert.doesNotMatch(content, /归档/);
+  assert.doesNotMatch(content, /完成后/);
+  assert.doesNotMatch(content, /重要度/);
+  assert.doesNotMatch(content, /隐藏剧情/);
   assert.doesNotMatch(content, /^ {2}事件\.月历\.临时:/m);
   assert.doesNotMatch(content, /^ {2}事件\.月历\.重复:/m);
 }
