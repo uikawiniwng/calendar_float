@@ -43,9 +43,21 @@ function resolveReminderFlag(source: Record<string, unknown>): boolean {
   return readLegacyVisibility(source) !== '仅玩家';
 }
 
+function buildLegacyWidgetVisibility(display: boolean, remind: boolean): RawCalendarEvent['可见性'] {
+  if (!display && remind) {
+    return '仅LLM';
+  }
+  if (!display && !remind) {
+    return '完全不显示';
+  }
+  return remind ? '玩家与LLM' : '仅玩家';
+}
+
 export function sanitizeRawEvent(value: unknown, bucketType?: CalendarBucketType): RawCalendarEvent {
   const source = _.isPlainObject(value) ? (value as Record<string, unknown>) : {};
   const 重复规则 = bucketType === '临时' ? '无' : sanitizeRule(source.重复规则 ?? source.重复规则分类);
+  const 显示 = resolveDisplayFlag(source);
+  const 提醒 = resolveReminderFlag(source);
   return {
     标题: String(source.标题 ?? '').trim(),
     内容: String(source.内容 ?? '').trim(),
@@ -53,9 +65,13 @@ export function sanitizeRawEvent(value: unknown, bucketType?: CalendarBucketType
     结束时间: String(source.结束时间 ?? '').trim(),
     重复规则,
     提前提醒天数: sanitizeReminderLeadDays(source.提前提醒天数),
-    显示: resolveDisplayFlag(source),
-    提醒: resolveReminderFlag(source),
+    显示,
+    提醒,
     标签: sanitizeTagList(source.标签),
+
+    // In-memory bridge only for the legacy widget host. `flattenCalendarBuckets()`
+    // strips this before persistence so the new MVU contract stays clean.
+    可见性: buildLegacyWidgetVisibility(显示, 提醒),
   };
 }
 
@@ -89,8 +105,24 @@ export function splitCalendarRecords(records: Record<string, RawCalendarEvent>):
   return { 临时, 重复 };
 }
 
+function toPersistedCalendarEvent(event: RawCalendarEvent): RawCalendarEvent {
+  return {
+    标题: String(event.标题 || '').trim(),
+    内容: String(event.内容 || '').trim(),
+    时间: String(event.时间 || '').trim(),
+    结束时间: String(event.结束时间 || '').trim(),
+    重复规则: sanitizeRule(event.重复规则),
+    提前提醒天数: sanitizeReminderLeadDays(event.提前提醒天数),
+    显示: event.显示 !== false,
+    提醒: event.提醒 !== false,
+    标签: sanitizeTagList(event.标签),
+  };
+}
+
 export function flattenCalendarBuckets(buckets: ActiveCalendarBuckets): Record<string, RawCalendarEvent> {
-  return sanitizeEventRecords({ ...buckets.临时, ...buckets.重复 });
+  return Object.fromEntries(
+    Object.entries({ ...buckets.临时, ...buckets.重复 }).map(([id, event]) => [id, toPersistedCalendarEvent(event)]),
+  );
 }
 
 export function sanitizeActiveCalendarBuckets(value: unknown): ActiveCalendarBuckets {
