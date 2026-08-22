@@ -1,5 +1,11 @@
 import { readActiveBuckets, replaceActiveBuckets } from './storage';
-import type { CalendarBucketType, CalendarEventRecord, RawCalendarEvent, RepeatRule } from './types';
+import type {
+  CalendarBucketType,
+  CalendarEventRecord,
+  CalendarVisibility,
+  RawCalendarEvent,
+  RepeatRule,
+} from './types';
 
 export interface CalendarFormSaveInput {
   /** Legacy UI field. Persistence semantics are derived only from `rule`. */
@@ -11,8 +17,12 @@ export interface CalendarFormSaveInput {
   start: string;
   end: string;
   rule: string;
-  display: boolean;
-  remind: boolean;
+  /** New host API. Player-created items default to visible. */
+  display?: boolean;
+  /** New host API. */
+  remind?: boolean;
+  /** @deprecated Temporary bridge for the current widget host. `仅玩家` means no LLM reminder. */
+  visibility?: CalendarVisibility;
   editingRecord: Pick<CalendarEventRecord, 'id'> | null;
 }
 
@@ -27,14 +37,15 @@ function normalizeRepeatRule(rule: string): RepeatRule | null {
 }
 
 function buildRawCalendarEvent(input: CalendarFormSaveInput, repeatRule: RepeatRule): RawCalendarEvent {
+  const remind = input.remind ?? input.visibility !== '仅玩家';
   return {
     标题: input.title,
     内容: input.content,
     时间: input.start,
     结束时间: input.end,
     重复规则: repeatRule,
-    显示: input.display,
-    提醒: input.remind,
+    显示: input.display ?? true,
+    提醒: remind,
     标签: input.tags,
   };
 }
