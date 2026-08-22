@@ -1,5 +1,5 @@
 export type CalendarBucketType = '临时' | '重复';
-export type RepeatRule = '无' | '每天' | '每周' | '每月' | '每年' | '仅工作日' | '仅节假日';
+export type RepeatRule = '无' | '每天' | '每周' | '每月' | '每年' | '仅工作日';
 export type EventSourceKind = 'active' | 'archive' | 'festival';
 export type FestivalSourceKind = 'fixed' | 'worldbook';
 export type AgendaItemKind = 'user' | 'festival';
