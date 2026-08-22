@@ -12,12 +12,18 @@ export type CalendarSourceKind =
   | 'extra'
   | 'dev';
 
+/** @deprecated Legacy event-management fields retained only for migration compatibility. */
 export type CalendarNarrativeEventType = '日程' | '事件' | '回忆';
+/** @deprecated Legacy event-management fields retained only for migration compatibility. */
 export type CalendarPostAction = '历史' | '自动清理' | '归档' | '转回忆';
+/** @deprecated Legacy event-management fields retained only for migration compatibility. */
 export type CalendarImportance = '重要且紧急' | '重要不紧急' | '不重要但紧急' | '不重要不紧急';
+/** @deprecated Legacy visibility state machine retained only for migration compatibility. */
 export type CalendarVisibility = '玩家与LLM' | '仅玩家' | '仅LLM' | '完全不显示';
+/** @deprecated Calendar no longer owns cross-system business state. */
 export type CalendarLinkType = '任务' | '世界事件';
 
+/** @deprecated Calendar no longer exposes cross-system links in the new MVU contract. */
 export interface CalendarLink {
   类型: CalendarLinkType;
   ID: string;
@@ -40,12 +46,22 @@ export interface RawCalendarEvent {
   时间: string;
   结束时间?: string;
   重复规则: RepeatRule;
-  类型?: CalendarNarrativeEventType;
-  完成后?: CalendarPostAction;
-  重要度?: CalendarImportance;
   提前提醒天数?: number;
-  可见性?: CalendarVisibility;
+  /** Whether the item is visible in the player calendar UI. Defaults to true. */
+  显示?: boolean;
+  /** Whether reaching the reminder/due time should produce an LLM reminder. Defaults to true. */
+  提醒?: boolean;
   标签?: string[];
+
+  /** @deprecated Legacy compatibility only. */
+  类型?: CalendarNarrativeEventType;
+  /** @deprecated Legacy compatibility only. */
+  完成后?: CalendarPostAction;
+  /** @deprecated Legacy compatibility only. */
+  重要度?: CalendarImportance;
+  /** @deprecated Legacy compatibility only. */
+  可见性?: CalendarVisibility;
+  /** @deprecated Legacy compatibility only. */
   关联?: CalendarLink;
 }
 
