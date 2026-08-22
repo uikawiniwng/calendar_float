@@ -19,7 +19,7 @@ export type CalendarFormSaveResult =
   | { ok: true }
   | { ok: false; message: string };
 
-const ALLOWED_REPEAT_RULES: RepeatRule[] = ['无', '每天', '每周', '每月', '每年', '仅工作日', '仅节假日'];
+const ALLOWED_REPEAT_RULES: RepeatRule[] = ['无', '每天', '每周', '每月', '每年', '仅工作日'];
 
 function normalizeRepeatRule(rule: string): RepeatRule | null {
   return ALLOWED_REPEAT_RULES.includes(rule as RepeatRule) ? (rule as RepeatRule) : null;
