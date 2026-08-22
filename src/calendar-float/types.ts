@@ -1,6 +1,6 @@
 export type CalendarBucketType = '临时' | '重复';
 export type RepeatRule = '无' | '每天' | '每周' | '每月' | '每年' | '仅工作日';
-export type EventSourceKind = 'active' | 'archive' | 'festival';
+export type EventSourceKind = 'active' | 'festival';
 export type FestivalSourceKind = 'fixed' | 'worldbook';
 export type AgendaItemKind = 'user' | 'festival';
 export type ReminderLevel = 'none' | 'soon' | 'today';
@@ -12,18 +12,18 @@ export type CalendarSourceKind =
   | 'extra'
   | 'dev';
 
-/** @deprecated Legacy event-management fields retained only for migration compatibility. */
+/** @deprecated Legacy-save compatibility only. New calendar data uses `显示` / `提醒`. */
 export type CalendarNarrativeEventType = '日程' | '事件' | '回忆';
-/** @deprecated Legacy event-management fields retained only for migration compatibility. */
+/** @deprecated Legacy-save compatibility only. Calendar no longer owns post-event lifecycle. */
 export type CalendarPostAction = '历史' | '自动清理' | '归档' | '转回忆';
-/** @deprecated Legacy event-management fields retained only for migration compatibility. */
+/** @deprecated Legacy-save compatibility only. Calendar no longer owns importance. */
 export type CalendarImportance = '重要且紧急' | '重要不紧急' | '不重要但紧急' | '不重要不紧急';
-/** @deprecated Legacy visibility state machine retained only for migration compatibility. */
+/** @deprecated Legacy-save compatibility only. New calendar data uses `显示` / `提醒`. */
 export type CalendarVisibility = '玩家与LLM' | '仅玩家' | '仅LLM' | '完全不显示';
-/** @deprecated Calendar no longer owns cross-system business state. */
+/** @deprecated Legacy-save compatibility only. Calendar no longer owns cross-domain links. */
 export type CalendarLinkType = '任务' | '世界事件';
 
-/** @deprecated Calendar no longer exposes cross-system links in the new MVU contract. */
+/** @deprecated Legacy-save compatibility only. */
 export interface CalendarLink {
   类型: CalendarLinkType;
   ID: string;
@@ -46,42 +46,29 @@ export interface RawCalendarEvent {
   时间: string;
   结束时间?: string;
   重复规则: RepeatRule;
-  提前提醒天数?: number;
-  /** Whether the item is visible in the player calendar UI. Defaults to true. */
   显示?: boolean;
-  /** Whether reaching the reminder/due time should produce an LLM reminder. Defaults to true. */
   提醒?: boolean;
+  提前提醒天数?: number;
   标签?: string[];
-
-  /** @deprecated Legacy compatibility only. */
+  /** @deprecated Legacy-save compatibility only. */
   类型?: CalendarNarrativeEventType;
-  /** @deprecated Legacy compatibility only. */
+  /** @deprecated Legacy-save compatibility only. */
   完成后?: CalendarPostAction;
-  /** @deprecated Legacy compatibility only. */
+  /** @deprecated Legacy-save compatibility only. */
   重要度?: CalendarImportance;
-  /** @deprecated Legacy compatibility only. */
+  /** @deprecated Legacy-save compatibility only. */
   可见性?: CalendarVisibility;
-  /** @deprecated Legacy compatibility only. */
+  /** @deprecated Legacy-save compatibility only. */
   关联?: CalendarLink;
 }
 
 /**
- * Internal view only. Persistence is a single `事件.月历.[id]` collection.
+ * Internal recurrence view only. Persistence is a single `事件.月历.[id]` collection.
  * The UI may split records by recurrence to reuse existing rendering code.
  */
 export interface ActiveCalendarBuckets {
   临时: Record<string, RawCalendarEvent>;
   重复: Record<string, RawCalendarEvent>;
-}
-
-export interface ArchivedCalendarEvent extends RawCalendarEvent {
-  id: string;
-  type: CalendarBucketType;
-  archived_at: string;
-  completed_at?: string;
-  tags: string[];
-  preserved_for_player: true;
-  archive_reason?: 'completed' | 'auto_cleanup' | 'manual_delete' | 'memory';
 }
 
 export interface CalendarSourceConfig {
@@ -90,11 +77,10 @@ export interface CalendarSourceConfig {
   devWorldbooks: string[];
 }
 
-export interface CalendarArchivePolicy {
-  archiveOnActiveRemoval: boolean;
-  skipArchiveTags: string[];
-  autoDeleteTags: string[];
-  protectedTags: string[];
+export interface CalendarSourceSettings {
+  sources: CalendarSourceConfig;
+  dismissedFestivalReminderKeys: string[];
+  dismissedUserReminderKeys: string[];
   customTags: string[];
   tagColors: Record<string, CalendarEventColorStyle>;
 }
@@ -102,15 +88,6 @@ export interface CalendarArchivePolicy {
 export interface ResolvedCalendarWorldbookSource {
   name: string;
   kind: CalendarSourceKind;
-}
-
-export interface CalendarArchiveStore {
-  completed: Record<string, ArchivedCalendarEvent>;
-  dismissedFestivalReminderKeys: string[];
-  dismissedUserReminderKeys: string[];
-  sources: CalendarSourceConfig;
-  policy: CalendarArchivePolicy;
-  lastActiveSnapshot: ActiveCalendarBuckets;
 }
 
 export interface DatePoint {
@@ -153,7 +130,7 @@ export interface CalendarEventRecord {
   repeatRule: RepeatRule;
   tags: string[];
   allDay: boolean;
-  raw?: RawCalendarEvent | ArchivedCalendarEvent;
+  raw?: RawCalendarEvent;
   range?: DateRange;
   relatedBookIds: string[];
   metadata: Record<string, unknown>;
@@ -212,7 +189,7 @@ export interface DayCellEventChip {
   isStart: boolean;
   isEnd: boolean;
   source: EventSourceKind;
-  colorToken: 'user' | 'festival' | 'archived';
+  colorToken: 'user' | 'festival';
   color?: CalendarEventColorStyle;
   displayKind?: 'bar' | 'stage-bubble';
 }
@@ -284,7 +261,6 @@ export interface CalendarDataset {
   calendarAnchor?: CalendarAnchor;
   currentLocationText: string;
   activeEvents: CalendarEventRecord[];
-  archivedEvents: CalendarEventRecord[];
   festivals: FestivalRecord[];
   books: Record<string, CalendarBookRecord>;
   suggestions: CalendarSuggestionSet;
@@ -320,7 +296,6 @@ export interface WidgetState {
   reminder: ReminderState;
   dataset: CalendarDataset | null;
   filterKeyword: string;
-  showArchived: boolean;
   formMode: 'create' | 'edit';
   editingEventId: string | null;
 }
