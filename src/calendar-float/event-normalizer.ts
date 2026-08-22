@@ -68,6 +68,18 @@ export function sanitizeLink(value: unknown): CalendarLink | undefined {
   return { 类型: 类型 as CalendarLink['类型'], ID };
 }
 
+function resolveDisplayFlag(source: Record<string, unknown>): boolean {
+  if (typeof source.显示 === 'boolean') {
+    return source.显示;
+  }
+  const legacyVisibility = sanitizeVisibility(source.可见性);
+  return legacyVisibility !== '仅LLM' && legacyVisibility !== '完全不显示';
+}
+
+function resolveReminderFlag(source: Record<string, unknown>): boolean {
+  return typeof source.提醒 === 'boolean' ? source.提醒 : true;
+}
+
 export function convertToMemory(
   value: RawCalendarEvent,
   bucketType?: CalendarBucketType,
@@ -77,6 +89,8 @@ export function convertToMemory(
     ...normalized,
     类型: '回忆',
     可见性: '仅玩家',
+    显示: true,
+    提醒: false,
     完成后: '归档',
   };
 }
@@ -92,12 +106,16 @@ export function sanitizeRawEvent(value: unknown, bucketType?: CalendarBucketType
     时间: String(source.时间 ?? '').trim(),
     结束时间: String(source.结束时间 ?? '').trim(),
     重复规则,
+    提前提醒天数: sanitizeReminderLeadDays(source.提前提醒天数),
+    显示: resolveDisplayFlag(source),
+    提醒: resolveReminderFlag(source),
+    标签: sanitizeTagList(source.标签),
+
+    // Legacy fields remain normalized while old UI/archive code is being removed.
     类型,
     完成后: sanitizePostAction(source.完成后),
     重要度,
-    提前提醒天数: sanitizeReminderLeadDays(source.提前提醒天数),
     可见性: sanitizeVisibility(source.可见性),
-    标签: sanitizeTagList(source.标签),
     关联: sanitizeLink(source.关联),
   };
 }
