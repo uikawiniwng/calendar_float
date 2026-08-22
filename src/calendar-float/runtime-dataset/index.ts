@@ -60,6 +60,7 @@ export async function loadCalendarDatasetFromRuntimeWorldbook(
     calendarAnchor: worldTime.anchor ?? undefined,
     currentLocationText,
     activeEvents,
+    archivedEvents: [],
     festivals: runtimeFestivals.filter((value): value is FestivalRecord => Boolean(value)),
     books: Object.fromEntries(runtimeBooks.map(book => [book.id, book])),
     suggestions: buildSuggestionSet({ activeBuckets, settings }),
