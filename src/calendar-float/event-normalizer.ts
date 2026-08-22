@@ -68,6 +68,19 @@ export function sanitizeLink(value: unknown): CalendarLink | undefined {
   return { 类型: 类型 as CalendarLink['类型'], ID };
 }
 
+export function convertToMemory(
+  value: RawCalendarEvent,
+  bucketType?: CalendarBucketType,
+): RawCalendarEvent {
+  const normalized = sanitizeRawEvent(value, bucketType);
+  return {
+    ...normalized,
+    类型: '回忆',
+    可见性: '仅玩家',
+    完成后: '归档',
+  };
+}
+
 export function sanitizeRawEvent(value: unknown, bucketType?: CalendarBucketType): RawCalendarEvent {
   const source = _.isPlainObject(value) ? (value as Record<string, unknown>) : {};
   const 类型 = sanitizeNarrativeType(source.类型);
