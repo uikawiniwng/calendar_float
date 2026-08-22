@@ -356,11 +356,15 @@ async function publishCalendarRuntimeWorldbookScan(result: CalendarRuntimeScanRe
 
 async function runCalendarRuntimeWorldbookScan(generation: number): Promise<void> {
   try {
-    const timedReminder = await evaluateCalendarTimedReminders();
+    const snapshot = await loadCalendarRuntimeWorldbookSnapshot();
     if (generation !== scanGeneration) {
       return;
     }
-    const snapshot = await loadCalendarRuntimeWorldbookSnapshot();
+    const monthAliases = normalizeCalendarMonthAliasList(snapshot.indexResult.索引?.月份别名);
+    const timedReminder = await evaluateCalendarTimedReminders(monthAliases);
+    if (generation !== scanGeneration) {
+      return;
+    }
     const result = await scanCalendarRuntimeWorldbook(snapshot);
     result.动态月历提醒 = buildCalendarTimedReminderPrompt(timedReminder.reminders);
     result.警告 = 取唯一文本([...result.警告, ...timedReminder.warnings]);
