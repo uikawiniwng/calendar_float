@@ -1,69 +1,92 @@
 # Project Structure
 
-本文件是仓库级入口，用来快速判断“该看哪里、该改哪里”。更细的模块说明放在对应目录的 `structure.md`。
+本文件只描述当前仓库结构与模块边界。产品定位与玩家价值见 `README.md`。
+
+## 当前产品边界
+
+Calendar Float 是**时间可视化与提醒层**：
+
+- 读取角色卡的世界时间
+- 读取固定世界日程与动态时间事项
+- 统一解析并渲染 Calendar UI
+- 在预定时间到达时提供 reminder
+
+它不拥有任务进度、新闻内容、世界事件状态、隐藏剧情策划或回忆数据库。
 
 ## 根目录
 
-- `README.md`：面向 GitHub 测试者的项目说明、安装思路、固定事件编辑器教程和 YAML 示例
-- `structure.md`：当前文件，维护者定位入口
-- `AGENTS.md`：Codex / Agent 进入本仓库后必须遵守的协作规则入口
-- `package.json`：构建、格式化、lint、同步命令和依赖清单
-- `webpack.config.ts`：把脚本入口打包为 Tavern Helper 可加载的浏览器脚本
-- `tsconfig.json`：TypeScript 编译配置
-- `tavern_sync.mjs`：酒馆同步脚本服务器与打包辅助逻辑
-- `节庆_索引.yaml`：旧索引源文件参考
-- `节庆_索引.latest.yaml`：结构化编辑器生成的 preferred YAML 参考
+- `README.md`：面向玩家与角色卡作者的产品说明
+- `structure.md`：当前文件，维护者快速定位入口
+- `AGENTS.md`：Agent 修改本仓库前必须遵守的协作规则入口
+- `package.json`：构建、格式化、lint、同步命令与依赖
+- `webpack.config.ts`：Tavern Helper 浏览器脚本打包配置
+- `tsconfig.json`：TypeScript 配置
+- `tavern_sync.mjs`：酒馆同步与开发辅助
+- `节庆_索引.latest.yaml`：固定事件索引参考样本
 
 ## 主要目录
 
-- `src/calendar-float/`：月历悬浮球主脚本源码，见 `src/calendar-float/structure.md`
-- `dist/calendar-float/index.js`：构建产物，由 `pnpm run build:dev` 或 `pnpm run build` 更新
-- `docs/handover/`：阶段交接记录，用于上下文压缩后恢复工作
-- `docs/superpowers/plans/`：仍有效的阶段计划与执行记录
-- `docs/superpowers/archive/`：已完成、过期或仅作历史参考的计划与检查记录
-- `checks/`：所有手写 smoke / regression check 的唯一目录；不要把新的 `.check.ts` 放进 `src/`
-- `docs/previews/`：本地静态预览文件
-- `@types/`：Tavern Helper、SillyTavern、MVU 等运行时全局接口类型定义
-- `util/`：项目共享工具函数
-- `svg/`：月历固定事件分组可用的内置 SVG 图标素材
-- `.cursor/rules/`：项目规则来源
+- `src/calendar-float/`：Calendar Float 主脚本源码，见 `src/calendar-float/structure.md`
+- `dist/calendar-float/index.js`：打包产物
+- `docs/superpowers/specs/`：仍有参考价值的专项设计说明；过时设计应直接更新或删除，不继续堆叠历史版本
+- `checks/calendar-float/`：手写 smoke / regression checks
+- `@types/`：Tavern Helper、SillyTavern、MVU 等运行时全局接口类型
+- `util/`：共享工具函数
+- `svg/`：固定事件分组可用的 SVG 图标
+- `.cursor/rules/`：项目协作与运行环境规则来源
+
+## 核心数据源
+
+### 当前世界时间
+
+由 profile 配置 MVU/stat_data 路径。任何日期判断必须基于世界时间；解析失败时不得回退现实电脑日期。
+
+### 固定事项
+
+`[fixed_event_index]` 是创作者随角色卡分发的固定时间资料源，适合课程、节庆、纪念日、比赛、固定周期活动和相关正文资料。
+
+### 动态事项
+
+新结构统一写入：
+
+```text
+stat_data.事件.月历.[事件ID]
+```
+
+`临时/重复` bucket 只保留旧资料读取兼容，不再是 persistence semantics。
 
 ## 常用修改入口
 
-- 修改月历主 UI：从 `src/calendar-float/widget/structure.md` 开始
-- 修改固定事件索引编辑器：从 `src/calendar-float/fixed-event-index-editor/structure.md` 开始
-- 修改 profile / 时间地点路径 / 纪元解析：看 `src/calendar-float/profile/`
-- 修改世界书 runtime 读取：看 `src/calendar-float/runtime-worldbook/`
-- 修改 runtime 命中判定：看 `src/calendar-float/runtime-trigger-evaluator/`
-- 修改用户自定义事件存储：看 `src/calendar-float/storage/`
-- 修改脚本启动流程：看 `src/calendar-float/index.ts`
-- 修改托管世界书安装、诊断、重装：看 `src/calendar-float/worldbook-manager/`
+- 修改主 UI：`src/calendar-float/widget/`
+- 修改固定事件索引编辑器：`src/calendar-float/fixed-event-index-editor/`
+- 修改 profile / 世界时间路径 / 纪元解析：`src/calendar-float/profile/`
+- 修改世界书 runtime 读取：`src/calendar-float/runtime-worldbook/`
+- 修改 dataset 组装：`src/calendar-float/runtime-dataset/`
+- 修改动态事项持久化与兼容迁移：`src/calendar-float/storage/`、`event-normalizer.ts`
+- 修改到时提醒判定：`src/calendar-float/runtime-trigger-evaluator/`
+- 修改 LLM-facing 月历变量规则：`src/calendar-float/mvu_rules/` 与 `src/calendar-float/worldbook-manager/content.ts`
+- 修改启动与 context lifecycle：`src/calendar-float/index.ts`、`runtime-context.ts`
 
-## 当前设计边界
+## 重构原则
 
-- 通用脚本主体不应该硬编码某张角色卡的节庆、地点或命名风格
-- profile 负责角色卡差异，例如 MVU 时间路径、地点路径、纪元名、日期解析和视觉 preset
-- `[fixed_event_index]` 是固定事件、补充资料和 runtime defaults 的主要数据源
-- 世界书基础设施条目使用通用语义名；带 `[DLC][扩展]` 的名字只属于《命定之诗》兼容路径
-- `widget/index.ts` 只负责 UI 生命周期和事件编排；纯数据变换应放回对应模块
+- Calendar dataset 只表达时间事项，不复制其他系统的业务状态
+- 固定事项优先留在 `[fixed_event_index]`，不要无意义复制进 MVU
+- 动态事项保持薄结构；新功能优先判断是否真的属于“显示时间 / 判断时间 / 提醒时间”
+- UI 可以为渲染方便建立内部 view model，但不要把内部分类反向变成 persistence hierarchy
+- 旧 `可见性`、`类型`、`完成后`、`重要度`、回忆与归档行为只作为迁移期 legacy surface，不能继续扩张成产品能力
+- 通用脚本主体不能硬编码《命定之诗》的节庆、地点或命名风格
+- profile 负责角色卡差异，固定事件索引负责可分发的世界 Calendar 配置
 
 ## Check 文件规则
 
-- `src/` 只放运行时代码、类型和模块内部资源
-- `.check.ts` 统一放在 `checks/calendar-float/`，并保留原模块相对路径
-- 新增 check 时，路径格式应为 `checks/calendar-float/<module>/<name>.check.ts`
-- check 可以 import `src/` 实现，但 `src/` 不应 import `checks/`
-- 迁移或新增 check 后，至少跑对应 check 和 `git diff --check`
+- `src/` 只放运行时代码、类型和模块资源
+- `.check.ts` 统一放在 `checks/calendar-float/`
+- 新增 check 时保留目标模块相对路径
+- check 可以 import `src/`，`src/` 不得 import `checks/`
 
-## 常用检查
+## 基础检查
 
 ```powershell
 git diff --check
 pnpm run build:dev
-```
-
-单个 TypeScript check 通常使用：
-
-```powershell
-pnpm exec ts-node --transpile-only --compiler-options '{"module":"CommonJS","moduleResolution":"node"}' checks/calendar-float/<module>/<check-name>.check.ts
 ```
