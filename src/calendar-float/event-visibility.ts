@@ -1,21 +1,14 @@
 import type { RawCalendarEvent } from './types';
 
-type VisibilitySource = Pick<RawCalendarEvent, '显示' | '可见性'>;
+type DisplaySource = Pick<RawCalendarEvent, '显示' | '可见性'>;
 
-export function isCalendarEventVisibleToPlayer(event: VisibilitySource): boolean {
+/**
+ * Player UI visibility for dynamic calendar items.
+ * New data uses `显示`; legacy `可见性` is an in-memory/read-only compatibility bridge.
+ */
+export function isCalendarEventVisibleToPlayer(event: DisplaySource): boolean {
   if (typeof event.显示 === 'boolean') {
     return event.显示;
   }
   return event.可见性 !== '仅LLM' && event.可见性 !== '完全不显示';
-}
-
-/**
- * Legacy compatibility for old projection code. New Calendar items are LLM-visible
- * regardless of player UI `显示`; `可见性` is only consulted for old saved data.
- */
-export function isCalendarEventVisibleToLlm(event: VisibilitySource): boolean {
-  if (event.可见性 === undefined) {
-    return true;
-  }
-  return event.可见性 !== '仅玩家' && event.可见性 !== '完全不显示';
 }
