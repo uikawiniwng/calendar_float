@@ -1,22 +1,19 @@
 ---
-现有月历事件
+现有月历事项
 
 <calendar_variables_display>
 <%_ { _%>
 <%_
   const rootPath = 'stat_data.事件.月历';
   const rawCalendar = getvar(rootPath, { defaults: {} });
-  // 兼容旧结构；LLM 永远只看到单一 collection。
+  // 兼容旧结构；对LLM始终展示为单一collection。
   const calendar = (_.isObject(rawCalendar.临时) || _.isObject(rawCalendar.重复))
     ? _.assign({}, rawCalendar.临时 || {}, _.mapValues(rawCalendar.重复 || {}, function (event) {
         return _.assign({}, event, { 重复规则: _.get(event, '重复规则', _.get(event, '重复规则分类', '无')) });
       }))
     : rawCalendar;
-  const isVisibleToLLM = function (event) {
-    return !['仅玩家', '完全不显示'].includes(String(_.get(event, '可见性', '')).trim());
-  };
   const cleanEvent = function (event) {
-    const output = _.pick(event, ['标题', '内容', '时间', '结束时间', '重复规则', '提前提醒天数', '可见性', '类型', '标签', '关联']);
+    const output = _.pick(event, ['标题', '内容', '时间', '结束时间', '重复规则', '提前提醒天数', '显示', '提醒', '标签']);
     if (_.get(output, '重复规则') === '无') delete output.重复规则;
     return _.pickBy(output, function (value) {
       return value !== undefined && value !== null && value !== '' && !(_.isArray(value) && value.length === 0);
@@ -25,7 +22,6 @@
   const displayOutput = {
     事件: {
       月历: _.chain(_.isObject(calendar) ? calendar : {})
-        .pickBy(isVisibleToLLM)
         .mapValues(cleanEvent)
         .pickBy(function (event) { return !_.isEmpty(event); })
         .value(),
