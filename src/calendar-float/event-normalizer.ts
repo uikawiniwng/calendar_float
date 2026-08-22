@@ -3,7 +3,7 @@ import type { ActiveCalendarBuckets, CalendarBucketType, CalendarLink, RawCalend
 
 export function sanitizeRule(value: unknown): RawCalendarEvent['重复规则'] {
   const rule = String(value ?? '无') as RawCalendarEvent['重复规则'];
-  return ['无', '每天', '每周', '每月', '每年', '仅工作日', '仅节假日'].includes(rule) ? rule : '无';
+  return ['无', '每天', '每周', '每月', '每年', '仅工作日'].includes(rule) ? rule : '无';
 }
 
 export function sanitizeNarrativeType(value: unknown): NonNullable<RawCalendarEvent['类型']> {
