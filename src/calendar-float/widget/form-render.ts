@@ -222,8 +222,9 @@ export function renderFormHtml(args: {
     start?: string;
     end?: string;
     rule?: string;
-    display?: boolean;
     remind?: boolean;
+    /** @deprecated Temporary bridge for the current widget host. */
+    visibility?: string;
   };
   editing?: boolean;
 }): string {
@@ -235,8 +236,7 @@ export function renderFormHtml(args: {
   const defaultDate = parseMonthDayFromText(args.nowText);
   const defaultMonth = defaultDate?.month ?? 1;
   const defaultDay = defaultDate?.day ?? 1;
-  const display = values.display !== false;
-  const remind = values.remind !== false;
+  const remind = values.remind ?? values.visibility !== '仅玩家';
   return `
     <section class="th-calendar-section">
       <div class="th-section-title-row">
@@ -260,10 +260,11 @@ export function renderFormHtml(args: {
             <input data-form-field="id" value="${escapeHtml(values.id || '')}" placeholder="留空自动生成，例如 class_01" />
           </div>
           <div class="th-form-field">
-            <label><input type="checkbox" data-form-field="display" ${display ? 'checked' : ''} /> 显示在玩家月历</label>
-          </div>
-          <div class="th-form-field">
-            <label><input type="checkbox" data-form-field="remind" ${remind ? 'checked' : ''} /> 到时提醒 LLM</label>
+            <label>到时提醒 LLM</label>
+            <select data-form-field="visibility">
+              <option value="玩家与LLM" ${remind ? 'selected' : ''}>开启</option>
+              <option value="仅玩家" ${remind ? '' : 'selected'}>关闭</option>
+            </select>
           </div>
           <div class="th-form-field" data-role="absolute-time-field" ${isRepeat ? 'hidden' : ''}>
             <label>时间</label>
