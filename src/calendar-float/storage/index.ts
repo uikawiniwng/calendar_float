@@ -1,22 +1,12 @@
 export { ensureCalendarLatestMessageVariableStore, readActiveBuckets, replaceActiveBuckets } from './active-buckets';
 export {
-  archiveCompletedEvent,
-  purgeArchivedEventWithPolicy,
-  purgeAutoDeleteArchivedEvents,
-  removeActiveEventWithPolicy,
-  resolveCalendarEventColor,
-  resolveCalendarEventPolicyAction,
-  restoreArchivedEvent,
-  syncArchiveFromMvuVariableDiff,
-  syncArchiveOnActiveRemoval,
-} from './archive-actions';
-export {
-  readCalendarArchivePolicy,
+  readCalendarSettings,
   readCalendarSourceConfig,
-  replaceCalendarArchivePolicy,
+  replaceCalendarSettings,
   replaceCalendarSourceConfig,
-} from './archive-settings';
-export { readArchiveStore, replaceArchiveStore } from './archive-store';
+  replaceCalendarTagSettings,
+  resolveCalendarEventColor,
+} from './calendar-settings';
 export { ensureMvuReady, getLatestMessageVariableTarget } from './message-variable';
 export {
   clearCalendarRuntimePathSettings,
