@@ -21,7 +21,8 @@ assert.match(prompt, /不要仅因本提醒自行判定任务完成\/失败或�
 assert.doesNotMatch(prompt, /仅LLM|完全不显示|转回忆|归档/);
 
 const scanner = readFileSync('src/calendar-float/runtime-worldbook/scanner.ts', 'utf8');
-assert.match(scanner, /evaluateCalendarTimedReminders/);
+assert.match(scanner, /evaluateCalendarTimedReminders\(monthAliases\)/);
+assert.match(scanner, /normalizeCalendarMonthAliasList/);
 assert.doesNotMatch(scanner, /promoteDueSealedCalendarEvents/);
 assert.doesNotMatch(scanner, /event-visibility-scheduler/);
 
