@@ -167,8 +167,8 @@ http://127.0.0.1:9222
 
 - `dev` 是唯一日常开发与上游同步分支；其他 feature branch 先进入 `dev`，不得直接进入 `main`。
 - `main` 是稳定发布分支，应由 GitHub Branch Protection 强制必须 PR、禁止 direct/force push 与删除，并要求 `verify` + `only-dev`；只有本仓库 `dev -> main` 可以 merge。
-- `dev` push / PR 只运行 lint + build 验证，不 commit、不 tag、不修改仓库。
-- `main` 更新后 `.github/workflows/bundle.yaml` 会 fresh install、lint、build，并把当次 `dist` 冻结进 release-only commit 后创建下一个 `vX.Y.Z` tag；release commit 不回写 `main`。
+- `dev` push / PR 运行 fresh install + production build 验证，不 commit、不 tag、不修改仓库；现有全仓 lint debt 另行清理，不作为当前发布门。
+- `main` 更新后 `.github/workflows/bundle.yaml` 会 fresh install、build，并把当次 `dist` 冻结进 release-only commit 后创建下一个 `vX.Y.Z` tag；release commit 不回写 `main`。
 - `dist` 是生成物，不是源码真相；正常开发、branch 切换和 PR 不要因本地 `dist` 缺失、旧或 dirty 而阻止操作。
 - 已发布 tag 永不移动、覆盖或删除；除非 Master 明确要求，不要手动创建或推送 tag。
 
