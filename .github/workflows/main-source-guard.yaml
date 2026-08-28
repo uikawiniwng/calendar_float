@@ -1,0 +1,24 @@
+name: main_source_guard
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  only-dev:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Only this repository's dev branch may target main
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          BASE_REPO: ${{ github.repository }}
+        run: |
+          if [ "$HEAD_REF" != "dev" ] || [ "$HEAD_REPO" != "$BASE_REPO" ]; then
+            echo "::error::Only the dev branch from this repository may merge into main."
+            exit 1
+          fi

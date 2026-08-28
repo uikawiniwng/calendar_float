@@ -1,63 +1,110 @@
-name: bundle
+name: release
 
 on:
   push:
     branches:
-      - master
       - main
-    paths-ignore:
-      - dist/**
-  workflow_dispatch:
 
 permissions:
-  actions: read
   contents: write
 
 concurrency:
-  group: ${{ github.workflow }}
+  group: release-main
+  cancel-in-progress: false
 
 jobs:
-  bundle:
+  release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: JesseTG/rm@v1.0.3
+      - name: Checkout source
+        uses: actions/checkout@v4
         with:
-          path: dist
+          fetch-depth: 0
+
+      - name: Skip if this source commit is already released
+        id: released
+        shell: bash
+        run: |
+          git fetch --tags
+          existing=""
+          for tag in $(git tag --list 'v*'); do
+            commit=$(git rev-list -n 1 "$tag")
+            parent=$(git rev-parse "$commit^" 2>/dev/null || true)
+            if [ "$commit" = "$GITHUB_SHA" ] || [ "$parent" = "$GITHUB_SHA" ]; then
+              existing="$tag"
+              break
+            fi
+          done
+          echo "tag=$existing" >> "$GITHUB_OUTPUT"
+          if [ -n "$existing" ]; then
+            echo "Source commit already released as $existing; nothing to do."
+          fi
 
       - name: Use Node.js
+        if: steps.released.outputs.tag == ''
         uses: actions/setup-node@v6
         with:
           node-version: 24
+
       - name: Setup pnpm
+        if: steps.released.outputs.tag == ''
         uses: pnpm/action-setup@v4
         with:
           version: 10
 
-      - run: pnpm install && pnpm build
-      - name: Only keep 角色卡示例 in dist for template upstream
-        if: github.repository == 'StageDog/tavern_helper_template'
-        run: |
-          mv dist/角色卡示例 角色卡示例
-          rm -rf dist
-          mkdir dist
-          mv 角色卡示例 dist/
-      - name: Remove 示例 in dist for templated repository
-        if: github.repository != 'StageDog/tavern_helper_template'
-        run: |
-          rm -rf dist/角色卡示例 dist/脚本示例 dist/流式楼层界面示例 dist/前端界面示例
-      - name: Commit changes
-        uses: EndBug/add-and-commit@v9.1.3
-        with:
-          default_author: github_actions
-          message: '[bot] bundle'
+      - name: Install dependencies
+        if: steps.released.outputs.tag == ''
+        run: pnpm install --frozen-lockfile
 
-      # 自动打版本 tag, 从而让 jsdelivr 基于版本号在 12h 内更新缓存而不是用非版本号的 7d 缓存
-      - id: autotag
-        if: github.repository != 'StageDog/tavern_helper_template'
-        uses: phish108/autotag-action@v1.1.64
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          with-v: true
-      - if: ${{ github.repository != 'StageDog/tavern_helper_template' && steps.autotag.outputs.tag != '0.0.0' && steps.autotag.outputs.new-tag != steps.autotag.outputs.tag }}
-        run: git push --delete origin ${{ steps.autotag.outputs.tag }}
+      - name: Lint
+        if: steps.released.outputs.tag == ''
+        run: pnpm lint
+
+      - name: Build release dist
+        if: steps.released.outputs.tag == ''
+        run: pnpm build
+
+      - name: Remove template example bundles
+        if: steps.released.outputs.tag == ''
+        shell: bash
+        run: rm -rf dist/角色卡示例 dist/脚本示例 dist/流式楼层界面示例 dist/前端界面示例
+
+      - name: Choose next version tag
+        if: steps.released.outputs.tag == ''
+        id: version
+        shell: bash
+        run: |
+          latest=$(git tag --list 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1 || true)
+          if [ -z "$latest" ]; then
+            next="v0.0.1"
+          else
+            version=${latest#v}
+            IFS='.' read -r major minor patch <<< "$version"
+            next="v${major}.${minor}.$((patch + 1))"
+          fi
+          echo "tag=$next" >> "$GITHUB_OUTPUT"
+          echo "Next release: $next"
+
+      - name: Freeze verified dist in release-only commit
+        if: steps.released.outputs.tag == ''
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f dist
+          if git diff --cached --quiet; then
+            echo "dist already matches the source commit; no release-only commit is needed."
+          else
+            git commit -m "[release] $TAG"
+          fi
+
+      - name: Create immutable release tag
+        if: steps.released.outputs.tag == ''
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        shell: bash
+        run: |
+          git tag -a "$TAG" -m "Release $TAG"
+          git push origin "$TAG"
